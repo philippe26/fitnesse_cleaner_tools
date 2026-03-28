@@ -119,7 +119,7 @@ class MHTMLCleaner:
             return "#"
         
         # Lien vers une autre page
-        if self._is_fitnesse_resource(url) or not self.preserve_fitnesse:
+        if self._is_fitnesse_resource(url) and not self.preserve_fitnesse:
             if self.level in ['moderate', 'strict']:
                 return None  # Supprimer le lien
         
@@ -129,17 +129,17 @@ class MHTMLCleaner:
         """Traite les attributs href et src du HTML"""
         
         def replace_href(match):
-            tag_start = match.group(1)
+            before = match.group(1)
             attr_name = match.group(2)
-            quote = match.group(3)
+            quote_char = match.group(3)
             url = match.group(4)
-            tag_end = match.group(5)
+            after = match.group(5)
             
             # Vérifier si c'est un lien à supprimer
             if self._should_remove_link(url):
                 if self.verbose:
                     print(f"  ❌ Suppression: {url}")
-                return f'{tag_start} href={quote}#{quote}{tag_end}'
+                return f'{before}{attr_name}={quote_char}#{quote_char}{after}'
             
             # Normaliser les liens localhost
             if 'localhost:50020' in url:
@@ -147,45 +147,72 @@ class MHTMLCleaner:
                 if normalized is None:
                     if self.verbose:
                         print(f"  ⚠️  Désactif: {url}")
-                    return f'{tag_start} href={quote}#{quote}{tag_end}'
+                    return f'{before}{attr_name}={quote_char}#{quote_char}{after}'
                 else:
                     if self.verbose and normalized != url:
                         print(f"  ✓ {url} → {normalized}")
-                    return f'{tag_start} {attr_name}={quote}{normalized}{quote}{tag_end}'
+                    return f'{before}{attr_name}={quote_char}{normalized}{quote_char}{after}'
             
             return match.group(0)
         
-        # Pattern pour href et src
-        pattern = r'(<[^>]*?\s)(href|src)(=)(["\'])([^"\']*?)\4([^>]*?>)'
-        html_content = re.sub(pattern, replace_href, html_content, flags=re.IGNORECASE)
+        # Pattern simplifié: (avant)(href|src)(=)(quote)(url)(quote)(après)
+        # Chercher href ou src suivi de = et d'une URL entre guillemets
+        pattern = r'((?:href|src)\s*=\s*)(["\'])([^"\']*?)\2'
+        
+        def replace_simple(m):
+            attr_with_eq = m.group(1)
+            quote_char = m.group(2)
+            url = m.group(3)
+            
+            # Vérifier si c'est un lien à supprimer
+            if self._should_remove_link(url):
+                if self.verbose:
+                    print(f"  ❌ Suppression: {url}")
+                return f'{attr_with_eq}{quote_char}#{quote_char}'
+            
+            # Normaliser les liens localhost
+            if 'localhost:50020' in url:
+                normalized = self._normalize_localhost_link(url)
+                if normalized is None:
+                    if self.verbose:
+                        print(f"  ⚠️  Désactif: {url}")
+                    return f'{attr_with_eq}{quote_char}#{quote_char}'
+                else:
+                    if self.verbose and normalized != url:
+                        print(f"  ✓ {url} → {normalized}")
+                    return f'{attr_with_eq}{quote_char}{normalized}{quote_char}'
+            
+            return m.group(0)
+        
+        html_content = re.sub(pattern, replace_simple, html_content, flags=re.IGNORECASE)
         
         return html_content
     
     def _process_form_actions(self, html_content: str) -> str:
         """Traite les attributs action des formulaires"""
         
-        def replace_action(match):
-            tag_start = match.group(1)
-            quote = match.group(2)
-            url = match.group(3)
-            tag_end = match.group(4)
+        pattern = r'(action\s*=\s*)(["\'])([^"\']*?)\2'
+        
+        def replace_action(m):
+            attr_with_eq = m.group(1)
+            quote_char = m.group(2)
+            url = m.group(3)
             
             if self._should_remove_link(url):
                 if self.verbose:
                     print(f"  ❌ Action supprimée: {url}")
-                return f'{tag_start} action={quote}#{quote}{tag_end}'
+                return f'{attr_with_eq}{quote_char}#{quote_char}'
             
             if 'localhost:50020' in url:
                 normalized = self._normalize_localhost_link(url)
                 if normalized is None or normalized == "#":
-                    return f'{tag_start} action={quote}#{quote}{tag_end}'
+                    return f'{attr_with_eq}{quote_char}#{quote_char}'
                 if self.verbose and normalized != url:
                     print(f"  ✓ action: {url} → {normalized}")
-                return f'{tag_start} action={quote}{normalized}{quote}{tag_end}'
+                return f'{attr_with_eq}{quote_char}{normalized}{quote_char}'
             
-            return match.group(0)
+            return m.group(0)
         
-        pattern = r'(<form[^>]*?\s)(action)(=)(["\'])([^"\']*?)\4([^>]*?>)'
         html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
         
         return html_content
