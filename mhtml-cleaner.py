@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.2.1 FINAL
-✅ FIX #1: Base64 sans sauts de ligne  
-✅ FIX #2: URL CSS sans chemin relatif
-✅ FIX #3: Ancres avec numéros (#1, #2, etc.) - index 23, not 24!
-✅ FIX #4: Option --remove-sidenav
+MHTML Cleaner v2.2.1 FINAL - Production Ready
+✅ #1: Base64 sans sauts de ligne/backslashes
+✅ #2: URL CSS sans chemin relatif (url("../img/data:...") → url("data:..."))
+✅ #3: Ancres numérotées conservées (#1, #2, ... grâce à index 23, not 24)
+✅ #4: Option --remove-sidenav pour <div class="sidenav">
 """
 
 import re
 import argparse
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Tuple
 
 
@@ -36,8 +35,39 @@ class MHTMLCleaner:
         self.output_format = output_format.lower()
         self.remove_buttons = remove_buttons
         self.remove_sidenav = remove_sidenav
-        
+        self.main_page = self._extract_main_page_name()
+    
+    def _extract_main_page_name(self) -> str:
+        """Extrait le nom de la page principale (amélioré avec fallbacks)"""
+        try:
+            with open(self.input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                file_content = f.read(30000)
+            
 
+            
+            # Méthode 2: URL localhost la plus courante (pas FitNesse)
+            urls = re.findall(r'http://localhost:50020/([^/?&\s"\']+)', file_content)
+            url_counts = {}
+            for url in urls:
+                if not any(x in url for x in ['files', 'FrontPage', 'RecentChanges', 'GaeL', 'FitNesse']):
+                    url_counts[url] = url_counts.get(url, 0) + 1
+            
+            if url_counts:
+                top_url = max(url_counts, key=url_counts.get)
+                return top_url
+            
+            # Méthode 3: Titre HTML
+            match = re.search(r'<title[^>]*>([^<]+)</title>', file_content, re.IGNORECASE)
+            if match:
+                title = match.group(1).split('.')[0].strip()
+                if title:
+                    return title
+        except:
+            pass
+        
+        return "Unknown"
+    
+    def _extract_html_section(self, content: str) -> Tuple[str, int, int]:
         """Extrait la section HTML principale du fichier MHTML"""
         html_start = content.find('<!DOCTYPE')
         if html_start == -1:
@@ -63,22 +93,25 @@ class MHTMLCleaner:
         return False
     
     def _normalize_localhost_link(self, url: str) -> str:
-        """Normalise les URLs localhost"""
+        """Normalise les URLs localhost en ancres"""
         if not url.startswith('http://localhost:50020/'):
             return None
         
-        # ✅ FIX #3: Index 23 (not 24!) - préserve les ancres comme #1
-        path = url[23:]  # Enlever "http://localhost:50020/"
+        # ✅ FIX #3: Index 23 (NOT 24!) pour préserver les ancres
+        # "http://localhost:50020/" = 23 chars
+        path = url[23:]  # Preserve "PidS.AnnexeAtr#1"
         
         if self.main_page in path:
             match = re.search(rf'{self.main_page}([^/&]*)', path)
             if match:
                 anchor = match.group(1)
                 if anchor.startswith('?'):
+                    # ?5 → #5
                     anchor_num = anchor[1:]
                     return f"#{anchor_num}" if anchor_num else "#"
                 elif anchor.startswith('#'):
-                    return anchor  # ✅ Preserve #1, #2, etc.
+                    # #1 → #1 (preserve!)
+                    return anchor
                 else:
                     return '#'
             return '#'
@@ -86,7 +119,7 @@ class MHTMLCleaner:
         return None
     
     def _process_html_attributes(self, html_content: str) -> str:
-        """Remplace les attributs href/src"""
+        """Remplace href/src"""
         def replace_action(m):
             prefix = m.group(1)
             url = m.group(2)
@@ -102,13 +135,10 @@ class MHTMLCleaner:
             return m.group(0)
         
         pattern = r'((?:href|src)\s*=\s*["\'])([^"\']*?)(["\'])'
-        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
-        
-        return html_content
+        return re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
     
     def _process_form_actions(self, html_content: str) -> str:
-        """Remplace les action=... dans les formulaires"""
-        
+        """Remplace action=..."""
         def replace_action(m):
             action = m.group(1)
             if self._should_remove_link(action):
@@ -120,12 +150,10 @@ class MHTMLCleaner:
             return m.group(0)
         
         pattern = r' action=(["\'])([^"\']*?)\1'
-        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
-        
-        return html_content
+        return re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
     
     def _decode_quoted_printable_section(self, content: str) -> str:
-        """Décode une section encodée en quoted-printable"""
+        """Décode quoted-printable"""
         lines = content.split('\n')
         decoded = []
         i = 0
@@ -151,12 +179,10 @@ class MHTMLCleaner:
         return result
     
     def _extract_and_inject_css(self, full_content: str, html_content: str) -> str:
-        """Extrait les CSS FitNesse du MHTML et les injecte en <style> tags"""
-        
+        """Extrait et injecte CSS"""
         css_sections = re.findall(
             r'Content-Location: (http://localhost:50020/files/fitnesse[^\n]+)\n\n(.+?)\n------',
-            full_content,
-            re.DOTALL
+            full_content, re.DOTALL
         )
         
         if not css_sections:
@@ -179,13 +205,12 @@ class MHTMLCleaner:
         html_content = html_content.replace('</head>', f'{style_tag}\n</head>')
         
         if self.verbose:
-            print(f"  📝 Style tag injecté: {len(combined_css) // 1024}KB de CSS")
+            print(f"  📝 CSS injecté: {len(combined_css) // 1024}KB")
         
         return html_content
     
     def _extract_and_inject_images(self, full_content: str, html_content: str) -> str:
-        """Extrait les images du MHTML et les injecte en data URLs base64"""
-        
+        """Extrait et injecte images en base64"""
         pattern = r'Content-Type: (image/\w+).*?\r?\nContent-Transfer-Encoding: base64\r?\nContent-Location: ([^\r\n]+)\r?\n\r?\n((?:[A-Za-z0-9+/=\r\n]+))'
         
         image_map = {}
@@ -195,13 +220,10 @@ class MHTMLCleaner:
             location = match.group(2).strip()
             base64_data_raw = match.group(3)
             
-            # ✅ FIX #1: Enlever tous les sauts de ligne et espaces du base64
+            # ✅ FIX #1: Enlever TOUS les sauts de ligne/espaces du base64
             base64_data = ''.join(base64_data_raw.split())
             
-            if location.startswith('cid:'):
-                filename = location
-            else:
-                filename = location.split('/')[-1]
+            filename = location if location.startswith('cid:') else location.split('/')[-1]
             
             image_map[location] = {
                 'mime': mime_type,
@@ -217,49 +239,43 @@ class MHTMLCleaner:
         if not image_map:
             if self.verbose:
                 print("  ℹ️  Aucune image à injecter")
-        else:
-            # Remplacer les images extraites
-            for location, img_info in image_map.items():
-                mime_type = img_info['mime']
-                base64_data = img_info['base64']
-                data_url = f'data:{mime_type};base64,{base64_data}'
-                
-                # Remplacer l'URL complète (avec &amp;, paramètres, etc.)
-                escaped_location = re.escape(location)
-                html_content = re.sub(
-                    rf'(["\'])({escaped_location}|{re.escape(location.replace("&", "&amp;"))})(["\'])',
-                    rf'\1{re.escape(data_url)}\3',
-                    html_content,
-                    flags=re.IGNORECASE
-                )
-                
-                # Remplacer par nom de fichier simple
-                filename = img_info['filename']
-                if filename and not filename.startswith('cid:'):
-                    escaped_filename = re.escape(filename)
-                    html_content = re.sub(
-                        escaped_filename,
-                        data_url,
-                        html_content,
-                        flags=re.IGNORECASE
-                    )
+            return html_content
+        
+        # Remplacer les images
+        for location, img_info in image_map.items():
+            mime_type = img_info['mime']
+            base64_data = img_info['base64']
+            data_url = f'data:{mime_type};base64,{base64_data}'
             
-            # ✅ FIX #2: Nettoyer les URL CSS avec chemin relatif avant data:
-            # Remplacer: url("../img/data:image/...") par url("data:image/...")
+            escaped_location = re.escape(location)
             html_content = re.sub(
-                r'url\(\s*["\']([^"\']*?)data:image/',
-                r'url("data:image/',
-                html_content,
-                flags=re.IGNORECASE
+                rf'(["\'])({escaped_location}|{re.escape(location.replace("&", "&amp;"))})(["\'])',
+                rf'\1{re.escape(data_url)}\3',
+                html_content, flags=re.IGNORECASE
             )
             
-            if self.verbose:
-                print(f"  ✅ {len(image_map)} images injectées en base64")
+            filename = img_info['filename']
+            if filename and not filename.startswith('cid:'):
+                escaped_filename = re.escape(filename)
+                html_content = re.sub(
+                    escaped_filename, data_url, html_content, flags=re.IGNORECASE
+                )
+        
+        # ✅ FIX #2: Nettoyer les URL CSS avec chemin relatif
+        # url("../img/data:image/...") → url("data:image/...")
+        html_content = re.sub(
+            r'url\(\s*["\']([^"\']*?)data:image/',
+            r'url("data:image/',
+            html_content, flags=re.IGNORECASE
+        )
+        
+        if self.verbose:
+            print(f"  ✅ {len(image_map)} images injectées")
         
         return html_content
     
     def _replace_remaining_localhost_links(self, html_content: str) -> str:
-        """Remplace les URLs localhost restantes par #"""
+        """Remplace URLs localhost restantes"""
         pattern = r'((?:src|href)\s*=\s*["\'])([^"\']*?localhost:50020[^"\']*?)(["\'])'
         
         def replacer(m):
@@ -274,15 +290,12 @@ class MHTMLCleaner:
             else:
                 return f'{prefix}#{suffix}'
         
-        html_content = re.sub(pattern, replacer, html_content, flags=re.IGNORECASE)
-        
-        return html_content
+        return re.sub(pattern, replacer, html_content, flags=re.IGNORECASE)
     
     def _clean_malformed_tags(self, html_content: str) -> str:
-        """Nettoie les tags HTML mal formés"""
+        """Nettoie HTML"""
         html_content = re.sub(r'<head>\s*<head[^>]*>', '<head>', html_content, flags=re.IGNORECASE)
-        head_close_count = html_content.count('</head>')
-        if head_close_count > 1:
+        if html_content.count('</head>') > 1:
             parts = html_content.split('</head>')
             html_content = '</head>'.join(parts[:-1]) + '</head>' + parts[-1]
         
@@ -292,20 +305,17 @@ class MHTMLCleaner:
         return html_content
     
     def _remove_fitnesse_buttons(self, html_content: str) -> str:
-        """Supprime les boutons FitNesse spécifiés"""
-        
+        """Supprime boutons FitNesse"""
         if not self.remove_buttons:
             return html_content
         
         buttons = ['Edit', 'Versions', 'Attributes', 'Review', 'Rationale', 'Expand', 'Collapse']
         
-        for button_name in buttons:
-            # Pattern 1: <a ... title="...">buttonname</a>
-            pattern1 = rf'<a[^>]*title=["\']?{button_name}["\']?[^>]*>[^<]*{button_name}[^<]*</a>'
+        for btn in buttons:
+            pattern1 = rf'<a[^>]*title=["\']?{btn}["\']?[^>]*>[^<]*{btn}[^<]*</a>'
             html_content = re.sub(pattern1, '', html_content, flags=re.IGNORECASE)
             
-            # Pattern 2: <button ... name="...">buttonname</button>
-            pattern2 = rf'<button[^>]*name=["\']?{button_name.lower()}["\']?[^>]*>[^<]*{button_name}[^<]*</button>'
+            pattern2 = rf'<button[^>]*name=["\']?{btn.lower()}["\']?[^>]*>[^<]*{btn}[^<]*</button>'
             html_content = re.sub(pattern2, '', html_content, flags=re.IGNORECASE)
         
         if self.verbose:
@@ -315,15 +325,12 @@ class MHTMLCleaner:
     
     def _remove_sidenav_div(self, html_content: str) -> str:
         """✅ FIX #4: Supprime <div class="sidenav">...</div>"""
-        
         if not self.remove_sidenav:
             return html_content
         
         html_content = re.sub(
             r'<div[^>]*class=["\']?sidenav["\']?[^>]*>.*?</div>',
-            '',
-            html_content,
-            flags=re.IGNORECASE | re.DOTALL
+            '', html_content, flags=re.IGNORECASE | re.DOTALL
         )
         
         if self.verbose:
@@ -332,17 +339,16 @@ class MHTMLCleaner:
         return html_content
     
     def clean(self) -> bool:
-        """Nettoie le fichier MHTML et le convertit en HTML pur"""
+        """Nettoie le MHTML"""
         try:
             if self.verbose:
                 print(f"📖 Lecture: {self.input_file}")
-                print(f"📄 Page principale détectée: {self.main_page}")
-                print(f"🔧 Niveau de nettoyage: {self.level}")
-                print(f"📝 Format de sortie: {self.output_format.upper()}")
+                print(f"📄 Page: {self.main_page}")
+                print(f"📝 Format: {self.output_format.upper()}")
                 if self.remove_buttons:
-                    print(f"🗑️  Suppression des boutons: OUI")
+                    print(f"🗑️  Boutons: OUI")
                 if self.remove_sidenav:
-                    print(f"🗑️  Suppression du sidenav: OUI")
+                    print(f"🗑️  Sidenav: OUI")
                 print()
             
             with open(self.input_file, 'r', encoding='utf-8') as f:
@@ -351,7 +357,7 @@ class MHTMLCleaner:
             html_section, html_start, html_end = self._extract_html_section(full_content)
             
             if self.verbose:
-                print("🧹 Nettoyage en cours...")
+                print("🧹 Nettoyage...")
             
             html_decoded = self._decode_quoted_printable_section(html_section)
             html_decoded = self._clean_malformed_tags(html_decoded)
@@ -367,73 +373,49 @@ class MHTMLCleaner:
             
             if self.output_format == 'html':
                 if self.verbose:
-                    print("  🔄 Conversion: MHTML → HTML pur")
+                    print("  🔄 MHTML → HTML pur")
                 
                 html_cleaned = re.sub(
                     r'<link[^>]*href=["\']cid:[^"\']+["\'][^>]*>',
-                    '',
-                    html_cleaned,
-                    flags=re.IGNORECASE
+                    '', html_cleaned, flags=re.IGNORECASE
                 )
                 
                 with open(self.output_file, 'w', encoding='utf-8') as f:
                     f.write(html_cleaned)
             else:
-                if self.verbose:
-                    print("  🔄 Format: MHTML multipart preservé")
                 cleaned_content = full_content[:html_start] + html_cleaned + full_content[html_end:]
                 with open(self.output_file, 'w', encoding='utf-8') as f:
                     f.write(cleaned_content)
             
             if self.verbose:
-                print(f"\n✅ Succès! Fichier nettoyé: {self.output_file}")
+                print(f"\n✅ Fichier: {self.output_file}")
             
             return True
             
         except Exception as e:
             print(f"❌ Erreur: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc()
             return False
 
 
 def main():
-    """Point d'entrée CLI"""
     parser = argparse.ArgumentParser(
-        description='MHTML Cleaner v2.2.1 FINAL - Convertit les fichiers MHTML en HTML',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-Exemples:
-  %(prog)s input.mhtml -o output.html
-  %(prog)s input.mhtml -o output.html --remove-buttons --remove-sidenav
-  %(prog)s input.mhtml -o output.html --verbose
-        '''
+        description='MHTML Cleaner v2.2.1 - Convertit MHTML en HTML',
     )
     
-    parser.add_argument('input_file', help='Fichier MHTML à nettoyer')
-    parser.add_argument('-o', '--output', dest='output_file', required=True,
-                        help='Fichier de sortie')
-    parser.add_argument('-l', '--level', choices=['light', 'moderate', 'strict'],
-                        default='moderate',
-                        help='Niveau de nettoyage (défaut: moderate)')
-    parser.add_argument('-p', '--preserve-fitnesse', action='store_true',
-                        help='Préserver les liens FitNesse (générer des liens cassés)')
-    parser.add_argument('-c', '--preserve-css', action='store_true',
-                        help='Préserver les imports CSS FitNesse')
-    parser.add_argument('-f', '--format', choices=['html', 'mhtml'],
-                        default='html',
-                        help='Format de sortie: html (recommandé) ou mhtml (défaut: html)')
-    parser.add_argument('-b', '--remove-buttons', action='store_true',
-                        help='Supprimer les boutons FitNesse (Edit, Versions, Attributes, etc.)')
-    parser.add_argument('-s', '--remove-sidenav', action='store_true',
-                        help='Supprimer le panneau <div class="sidenav"></div>')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Mode verbeux - affiche les transformations')
+    parser.add_argument('input_file', help='Fichier MHTML')
+    parser.add_argument('-o', '--output', dest='output_file', required=True, help='Fichier de sortie')
+    parser.add_argument('-l', '--level', choices=['light', 'moderate', 'strict'], default='moderate')
+    parser.add_argument('-p', '--preserve-fitnesse', action='store_true')
+    parser.add_argument('-c', '--preserve-css', action='store_true')
+    parser.add_argument('-f', '--format', choices=['html', 'mhtml'], default='html')
+    parser.add_argument('-b', '--remove-buttons', action='store_true', help='Supprimer boutons FitNesse')
+    parser.add_argument('-s', '--remove-sidenav', action='store_true', help='Supprimer <div class="sidenav">')
+    parser.add_argument('-v', '--verbose', action='store_true')
     
     args = parser.parse_args()
     
     if not Path(args.input_file).exists():
-        print(f"❌ Erreur: fichier d'entrée non trouvé: {args.input_file}", file=sys.stderr)
+        print(f"❌ Fichier non trouvé: {args.input_file}", file=sys.stderr)
         sys.exit(1)
     
     cleaner = MHTMLCleaner(
