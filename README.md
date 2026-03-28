@@ -1,334 +1,161 @@
-# MHTML Cleaner - Documentation
+# MHTML Cleaner
 
-## 📋 Aperçu
+`mhtml-cleaner.py` is a Python utility that converts an MHTML file into a standalone HTML file that displays correctly in a browser without a local server.
 
-`mhtml-cleaner.py` est un utilitaire Python pour nettoyer les fichiers MHTML générés par Microsoft Edge à partir de pages FitNesse. Il crée un **document 100% autonome** qui s'affiche correctement sans serveur FitNesse.
+## Features
 
-### ✨ Fonctionnalités principales
-
-- ✅ **Injection CSS automatique** : Extrait les 231KB de CSS FitNesse du fichier MHTML et les injecte dans une balise `<style>` → **la page s'affiche parfaitement**
-- ✅ **Conversion des liens** : Remplace les liens `http://localhost:50020/PidS.AnnexeAtr` par des ancres locales `#`
-- ✅ **Neutralise les liens cassés** : Remplace les ressources FitNesse inaccessibles par `#` (pas d'erreurs 404)
-- ✅ **Gère les paramètres** : Traite les query strings (`.?edit`, `.?properties`, etc.)
-- ✅ **Préserve les ressources** : Garde les fichiers embarqués (`cid:`)
-- ✅ **Trois niveaux** de nettoyage (light, moderate, strict)
-
-### 🎯 Résultat
-
-Un fichier MHTML qui :
-- ✅ S'ouvre dans Edge/Chrome/Firefox
-- ✅ Affiche le contenu avec styles (231KB de CSS)
-- ✅ Permet la navigation interne via ancres
-- ✅ Fonctionne entièrement hors ligne
+- **MHTML → HTML conversion**: extracts the HTML section and removes the multipart structure
+- **Automatic CSS injection**: extracts embedded stylesheets from the MHTML and injects them into a `<style>` tag
+- **Localhost link replacement**: converts `http://localhost:<port>/...` links into local anchors `#` or removes them
+- **Base64 image injection**: extracts embedded images and inlines them directly into the HTML
+- **Automatic port detection**: dynamically identifies the port used in the MHTML file
+- **Main page detection**: automatically identifies the reference page for anchor conversion
+- **Optional button removal**: strips editing buttons from the original interface
+- **Optional sidebar removal**: strips the side navigation panel
 
 ---
 
-## 🎨 Comment fonctionne l'injection CSS
-
-Le fichier MHTML original contient des **références à des ressources FitNesse** qui ne sont plus accessibles :
-
-```html
-<link rel="stylesheet" href="http://localhost:50020/files/fitnesse/css/fitnesse_wiki.css">
-<link rel="stylesheet" href="http://localhost:50020/files/fitnesse/bootstrap/css/fitnesse-bootstrap.css">
-```
-
-**Le problème :** Sans serveur FitNesse, ces CSS ne se chargent pas → **page blanche**.
-
-**La solution du script :**
-
-1. ✅ **Extrait** les CSS du fichier MHTML (ils y sont embarqués)
-2. ✅ **Décode** les sections quoted-printable  
-3. ✅ **Injecte** les CSS dans une balise `<style>` unique
-4. ✅ **Remplace** les liens `href="http://..."` par `href="#"` (inactifs mais harmless)
-
-**Résultat :** Tous les 231KB de CSS sont présents dans le fichier, la page s'affiche parfaitement.
-
----
-
-## 🚀 Installation & Utilisation
-
-### Prérequis
+## Requirements
 
 - Python 3.7+
-- Aucune dépendance externe
+- No external dependencies
 
-### Utilisation basique
+---
 
-```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml
-```
-
-### Options complètes
+## Usage
 
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml [options]
+python3 mhtml-cleaner.py input.mhtml -o output.html [options]
 ```
 
-| Option | Court | Effet |
-|--------|-------|-------|
-| `--level {light,moderate,strict}` | `-l` | Définit le niveau de nettoyage (défaut: `moderate`) |
-| `--preserve-fitnesse` | `-p` | Conserve les liens FitNesse (même cassés) |
-| `--preserve-css` | `-c` | Conserve les imports CSS FitNesse |
-| `--verbose` | `-v` | Affiche toutes les transformations |
-| `--help` | `-h` | Affiche l'aide |
+### Options
 
-## 📊 Exemple de résultat (PIDS_FAKE.mhtml)
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--output` | `-o` | _(required)_ | Output file |
+| `--level {light,moderate,strict}` | `-l` | `moderate` | Link cleaning level |
+| `--format {html,mhtml}` | | `html` | Output format |
+| `--preserve-fitnesse` | `-p` | off | Keep FitNesse links even if broken |
+| `--preserve-css` | `-c` | off | Keep external CSS imports without injecting them |
+| `--remove-buttons` | | off | Remove editing buttons |
+| `--remove-sidenav` | | off | Remove the side navigation panel |
+| `--verbose` | `-v` | off | Print details of each transformation |
+| `--help` | `-h` | | Show help |
 
-**Avant nettoyage:**
-- 121 liens `localhost:50020` non fonctionnels
-- CSS inaccessibles → page blanche dans Edge
-- Fichier: 597KB
+---
 
-**Après nettoyage (niveau moderate):**
-- ✅ 84 liens supprimés (69%)
-- ✅ 93 ancres locales créées pour navigation interne
-- ✅ 231KB de CSS FitNesse injecté → **page stylisée**
-- ✅ Fichier autonome: 823KB
-- ✅ Fonctionne dans Edge sans serveur
+## Cleaning levels
 
+### `--level light`
 
+Replaces only links pointing to the main page with local anchors.
 
-### 1. **light** (Minimal)
-
-**Comportement:**
-- Remplace uniquement les liens `localhost:50020/PidS.AnnexeAtr` (ou votre page) par `#`
-- Conserve tous les autres liens
-
-**Cas d'usage:**
-- Vous voulez juste rendre la page cliquable localement
-- Vous gardez la structure d'origine
-
-**Exemple:**
-```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml --level light
-```
-
-**Transformations:**
 ```html
-<!-- Avant -->
-<a href="http://localhost:50020/PidS.AnnexeAtr#section1">Aller à section 1</a>
+<!-- Before -->
+<a href="http://localhost:50020/MyDocument#section1">Section 1</a>
 
-<!-- Après -->
-<a href="#section1">Aller à section 1</a>
+<!-- After -->
+<a href="#section1">Section 1</a>
 ```
+
+### `--level moderate` (default)
+
+In addition to `light`:
+- Disables links to inaccessible resources (`/files/...`, `/FrontPage`, etc.) → `#`
+- Disables links to other pages → `#`
+
+### `--level strict`
+
+Same as `moderate`, but actively removes non-functional links instead of replacing them with `#`.
 
 ---
 
-### 2. **moderate** (Recommandé - par défaut)
+## Examples
 
-**Comportement:**
-- Remplace les liens vers la même page par `#`
-- Désactive les liens vers les ressources FitNesse (`/files/fitnesse/`, etc.) → `#`
-- Désactive les liens vers d'autres pages FitNesse → `#`
-
-**Cas d'usage:**
-- Cas standard : document autonome sans ressources externes
-- Meilleur équilibre entre nettoyage et fonctionnalité
-
-**Exemple:**
+### Standard conversion
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml --level moderate
+python3 mhtml-cleaner.py input.mhtml -o output.html
 ```
 
-**Transformations:**
-```html
-<!-- Lien vers la même page -->
-<a href="http://localhost:50020/PidS.AnnexeAtr?properties">Propriétés</a>
-→ <a href="#">Propriétés</a>
-
-<!-- Ressource FitNesse -->
-<link href="http://localhost:50020/files/fitnesse/css/fitnesse.css" rel="stylesheet">
-→ <link href="#" rel="stylesheet">
-
-<!-- Lien vers autre page -->
-<a href="http://localhost:50020/FrontPage">Accueil</a>
-→ <a href="#">Accueil</a>
-```
-
----
-
-### 3. **strict** (Agressif)
-
-**Comportement:**
-- Identique à `moderate`
-- Supprime activement tous les liens "cassés"
-
-**Cas d'usage:**
-- Nettoyage maximal pour une archive finale
-- Vous ne voulez aucun lien non-fonctionnel
-
-**Exemple:**
+### Verbose mode for diagnostics
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml --level strict
+python3 mhtml-cleaner.py input.mhtml -o output.html --verbose
 ```
 
----
-
-## 💡 Exemples d'utilisation avancée
-
-### Mode verbose pour déboguer
-
+### Full cleanup (buttons + sidebar removed)
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml -v
+python3 mhtml-cleaner.py input.mhtml -o output.html --remove-buttons --remove-sidenav
 ```
 
-**Résultat:**
-```
-📖 Lecture: input.mhtml
-📄 Page principale détectée: PidS.AnnexeAtr
-🔧 Niveau de nettoyage: moderate
-
-🧹 Nettoyage en cours...
-  ✓ http://localhost:50020/PidS.AnnexeAtr#section1 → #section1
-  ❌ Suppression: http://localhost:50020/files/fitnesse/css/fitnesse.css
-  ⚠️  Désactif: http://localhost:50020/FrontPage
-
-✅ Succès! Fichier nettoyé: output.mhtml
-```
-
-### Conserver les ressources FitNesse (liens cassés)
-
+### Strict cleanup with details
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml \
-  --level moderate \
-  --preserve-fitnesse
+python3 mhtml-cleaner.py input.mhtml -o output.html --level strict --verbose
 ```
 
-Utile si vous voulez garder la structure complète même si les ressources ne sont plus disponibles.
-
-### Nettoyage complet avec verbosité
-
+### Keep original links (even broken ones)
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml \
-  --level strict \
-  --verbose
+python3 mhtml-cleaner.py input.mhtml -o output.html --preserve-fitnesse
 ```
 
 ---
 
-## 🔍 Détails techniques
+## Processing pipeline
 
-### Détection de la page principale
+The script applies transformations in the following order:
 
-Le script détecte automatiquement le nom de la page depuis l'en-tête MHTML:
-
-```
-Snapshot-Content-Location: http://localhost:50020/PidS.AnnexeAtr
-                                                     ^^^^^^^^^^^^^^^^
-                                                  Page détectée ici
-```
-
-Les liens pointant vers cette page sont convertis en ancres `#`.
-
-### Ressources FitNesse reconnues
-
-Le script désactive automatiquement les imports de :
-- `/files/fitnesse/` - CSS, images, JavaScript FitNesse
-- `/files/bootstrap/` - Bootstrap framework
-- `/FrontPage` - Pages FitNesse standard
-- `/GaeL.*` - Pages du projet GaeL
-- `/FitNesse.*` - Pages système FitNesse
-- `/RecentChanges` - Historique
-
-### Décodage quoted-printable
-
-Les fichiers MHTML utilisent souvent le codage quoted-printable (=3D pour =, =20 pour espace, etc.). Le script décode automatiquement ces séquences.
+1. Read the MHTML file and detect the port
+2. Extract the HTML section + decode quoted-printable encoding
+3. Clean malformed HTML tags
+4. Replace localhost links (according to the chosen level)
+5. Inject embedded CSS into a `<style>` tag
+6. Extract and inject images as base64
+7. Clean data URLs in CSS
+8. Remove buttons _(if `--remove-buttons`)_
+9. Remove sidebar _(if `--remove-sidenav`)_
+10. Remove `cid:` references (MHTML-specific)
+11. Save as plain HTML
 
 ---
 
-## 📊 Tableau de décision
+## Output
 
-Quel niveau choisir?
-
-| Besoin | Niveau | Notes |
-|--------|--------|-------|
-| Rendre la page cliquable localement | **light** | Minimal, préserve la structure |
-| Document autonome standard | **moderate** | ✓ Recommandé pour la plupart des cas |
-| Archive finale, aucun lien cassé | **strict** | Nettoyage maximal |
-| Conserver liens FitNesse cassés | **\+ --preserve-fitnesse** | Pour archivage fidèle |
+The generated HTML file is **100% self-contained**:
+- Works offline, no server required
+- Opens in Edge, Chrome, and Firefox
+- CSS and images embedded inline
+- Internal navigation via anchors
 
 ---
 
-## 🐛 Dépannage
+## Troubleshooting
 
-### Le fichier de sortie n'est pas modifié
+### Page displays without styles
 
-**Cause:** Le script détecte peut-être mal le nom de la page.
+The CSS was not injected. Use `--verbose` to check that CSS sections are detected in the MHTML.
 
-**Solution:**
-```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml --verbose
-```
+### Anchors do not work
 
-Vérifiez que la page détectée est correcte (ligne "Page principale détectée").
+Anchor links point to sections that no longer exist in the document. This is expected for links that referenced other pages — they are replaced with `#`.
 
-### Les liens d'ancre ne fonctionnent pas
+### Main page not detected correctly
 
-**Cause:** Les ancres n'existaient que sur le serveur FitNesse.
-
-**Solution:** C'est normal. Les liens `#` vides empêchent les erreurs 404.
-
-### Le fichier MHTML n'est pas bien decodé
-
-**Cause:** Encodage différent.
-
-**Solution:**
-```bash
-# Vérifier l'encodage
-file -i input.mhtml
-
-# Forcer l'interprétation UTF-8 dans le script
-```
+Use `--verbose` to check the `Main page detected` line. The script attempts three detection methods in sequence: MHTML header, most frequent URLs, HTML title tag.
 
 ---
 
-## 📝 Format de sortie
-
-Le fichier de sortie reste au format MHTML complet :
-- ✓ Entête MIME préservée
-- ✓ Structure multipart/related maintenue
-- ✓ CSS embarqués conservés
-- ✓ Liens locaux nettoyés
-- ✓ Encodage UTF-8
-
-Vous pouvez ouvrir le fichier `.mhtml` directement dans votre navigateur.
-
----
-
-## 💻 Intégration en script
+## Use as a Python module
 
 ```python
 from mhtml_cleaner import MHTMLCleaner
 
 cleaner = MHTMLCleaner(
     input_file='input.mhtml',
-    output_file='output.mhtml',
+    output_file='output.html',
     level='moderate',
+    remove_buttons=True,
+    remove_sidenav=True,
     verbose=True
 )
 
 success = cleaner.clean()
-if success:
-    print("Nettoyage réussi!")
 ```
-
----
-
-## 📄 Licence & Notes
-
-- Script autonome, pas de dépendances externes
-- Compatible Python 3.7+
-- Testé sur fichiers MHTML générés par Edge
-- Préserve la structure MHTML d'origine
-
----
-
-## 🆘 Support
-
-Pour toute question ou bug report, consultez les logs en mode verbose:
-
-```bash
-python3 mhtml-cleaner.py input.mhtml -o output.mhtml -v 2>&1 | tee cleaning.log
-```
-
-Le fichier `cleaning.log` contient tous les détails des transformations.
