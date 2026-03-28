@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.2.1 FINAL - Production Ready
-✅ #1: Base64 sans sauts de ligne/backslashes
-✅ #2: URL CSS sans chemin relatif (url("../img/data:...") → url("data:..."))
-✅ #3: Ancres numérotées conservées (#1, #2, ... grâce à index 23, not 24)
-✅ #4: Option --remove-sidenav pour <div class="sidenav">
+MHTML Cleaner v2.2.2 FINAL - Production Ready
+✅ #1: Base64 sans sauts de ligne (et sans backslashes!)
+✅ #2: URL CSS sans chemin relatif
+✅ #3: Ancres numérotées conservées
+✅ #4: Option --remove-sidenav
+✅ #5: Détection dynamique du port (au lieu de hardcoded 50020)
 """
 
 import re
@@ -35,18 +36,45 @@ class MHTMLCleaner:
         self.output_format = output_format.lower()
         self.remove_buttons = remove_buttons
         self.remove_sidenav = remove_sidenav
+        
+        # ✅ NEW: Détecter le port dynamiquement
+        self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
     
+    def _extract_port(self) -> int:
+        """✅ NEW: Détecte le port localhost utilisé dans le MHTML"""
+        try:
+            with open(self.input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                file_content = f.read(10000)
+            
+            # Chercher http://localhost:PORT/
+            match = re.search(r'http://localhost:(\d+)/', file_content)
+            if match:
+                port = int(match.group(1))
+                if self.verbose:
+                    print(f"  🔍 Port détecté: {port}")
+                return port
+        except:
+            pass
+        
+        # Fallback par défaut
+        return 50020
+    
     def _extract_main_page_name(self) -> str:
-        """Extrait le nom de la page principale (amélioré avec fallbacks)"""
+        """Extrait le nom de la page principale"""
         try:
             with open(self.input_file, 'r', encoding='utf-8', errors='ignore') as f:
                 file_content = f.read(30000)
             
-
+            # Méthode 1: Snapshot-Content-Location
+            match = re.search(r'Snapshot-Content-Location:\s+.*\/([^\s\/]+)', file_content)
+            if match:
+                result = match.group(1).strip()
+                if result and result != 'files':
+                    return result
             
             # Méthode 2: URL localhost la plus courante (pas FitNesse)
-            urls = re.findall(r'http://localhost:50020/([^/?&\s"\']+)', file_content)
+            urls = re.findall(rf'http://localhost:{self.port}/([^/?&\s"\']+)', file_content)
             url_counts = {}
             for url in urls:
                 if not any(x in url for x in ['files', 'FrontPage', 'RecentChanges', 'GaeL', 'FitNesse']):
@@ -68,7 +96,7 @@ class MHTMLCleaner:
         return "Unknown"
     
     def _extract_html_section(self, content: str) -> Tuple[str, int, int]:
-        """Extrait la section HTML principale du fichier MHTML"""
+        """Extrait la section HTML principale"""
         html_start = content.find('<!DOCTYPE')
         if html_start == -1:
             html_start = content.find('<!doctype')
@@ -93,24 +121,22 @@ class MHTMLCleaner:
         return False
     
     def _normalize_localhost_link(self, url: str) -> str:
-        """Normalise les URLs localhost en ancres"""
-        if not url.startswith('http://localhost:50020/'):
+        """Normalise les URLs localhost"""
+        # ✅ UPDATED: Utiliser self.port au lieu de hardcoded 50020
+        prefix = f'http://localhost:{self.port}/'
+        if not url.startswith(prefix):
             return None
         
-        # ✅ FIX #3: Index 23 (NOT 24!) pour préserver les ancres
-        # "http://localhost:50020/" = 23 chars
-        path = url[23:]  # Preserve "PidS.AnnexeAtr#1"
+        path = url[len(prefix):]
         
         if self.main_page in path:
             match = re.search(rf'{self.main_page}([^/&]*)', path)
             if match:
                 anchor = match.group(1)
                 if anchor.startswith('?'):
-                    # ?5 → #5
                     anchor_num = anchor[1:]
                     return f"#{anchor_num}" if anchor_num else "#"
                 elif anchor.startswith('#'):
-                    # #1 → #1 (preserve!)
                     return anchor
                 else:
                     return '#'
@@ -180,8 +206,9 @@ class MHTMLCleaner:
     
     def _extract_and_inject_css(self, full_content: str, html_content: str) -> str:
         """Extrait et injecte CSS"""
+        # ✅ UPDATED: Utiliser self.port au lieu de 50020
         css_sections = re.findall(
-            r'Content-Location: (http://localhost:50020/files/fitnesse[^\n]+)\n\n(.+?)\n------',
+            rf'Content-Location: (http://localhost:{self.port}/files/fitnesse[^\n]+)\n\n(.+?)\n------',
             full_content, re.DOTALL
         )
         
@@ -210,7 +237,7 @@ class MHTMLCleaner:
         return html_content
     
     def _extract_and_inject_images(self, full_content: str, html_content: str) -> str:
-        """Extrait et injecte images en base64"""
+        """Extrait et injecte images en base64 (SANS échapper le contenu!)"""
         pattern = r'Content-Type: (image/\w+).*?\r?\nContent-Transfer-Encoding: base64\r?\nContent-Location: ([^\r\n]+)\r?\n\r?\n((?:[A-Za-z0-9+/=\r\n]+))'
         
         image_map = {}
@@ -220,7 +247,7 @@ class MHTMLCleaner:
             location = match.group(2).strip()
             base64_data_raw = match.group(3)
             
-            # ✅ FIX #1: Enlever TOUS les sauts de ligne/espaces du base64
+            # ✅ FIX #1: Enlever sauts de ligne (mais PAS les +, /, =!)
             base64_data = ''.join(base64_data_raw.split())
             
             filename = location if location.startswith('cid:') else location.split('/')[-1]
@@ -241,28 +268,35 @@ class MHTMLCleaner:
                 print("  ℹ️  Aucune image à injecter")
             return html_content
         
-        # Remplacer les images
+        # ✅ IMPORTANT: Utiliser lambda pour NE PAS échapper data_url!
         for location, img_info in image_map.items():
             mime_type = img_info['mime']
             base64_data = img_info['base64']
             data_url = f'data:{mime_type};base64,{base64_data}'
             
+            # Remplacer par URL complète
             escaped_location = re.escape(location)
+            escaped_location_amp = re.escape(location.replace("&", "&amp;"))
+            
+            # Utiliser lambda: JAMAIS re.escape(data_url)!
             html_content = re.sub(
-                rf'(["\'])({escaped_location}|{re.escape(location.replace("&", "&amp;"))})(["\'])',
-                rf'\1{re.escape(data_url)}\3',
+                rf'(["\'])({escaped_location}|{escaped_location_amp})(["\'])',
+                lambda m: f'{m.group(1)}{data_url}{m.group(3)}',
                 html_content, flags=re.IGNORECASE
             )
             
+            # Remplacer par nom de fichier
             filename = img_info['filename']
             if filename and not filename.startswith('cid:'):
                 escaped_filename = re.escape(filename)
+                # JAMAIS re.escape(data_url)!
                 html_content = re.sub(
-                    escaped_filename, data_url, html_content, flags=re.IGNORECASE
+                    escaped_filename, 
+                    data_url,
+                    html_content, flags=re.IGNORECASE
                 )
         
         # ✅ FIX #2: Nettoyer les URL CSS avec chemin relatif
-        # url("../img/data:image/...") → url("data:image/...")
         html_content = re.sub(
             r'url\(\s*["\']([^"\']*?)data:image/',
             r'url("data:image/',
@@ -276,7 +310,8 @@ class MHTMLCleaner:
     
     def _replace_remaining_localhost_links(self, html_content: str) -> str:
         """Remplace URLs localhost restantes"""
-        pattern = r'((?:src|href)\s*=\s*["\'])([^"\']*?localhost:50020[^"\']*?)(["\'])'
+        # ✅ UPDATED: Utiliser self.port au lieu de 50020
+        pattern = rf'((?:src|href)\s*=\s*["\'])([^"\']*?localhost:{self.port}[^"\']*?)(["\'])'
         
         def replacer(m):
             prefix = m.group(1)
@@ -324,7 +359,7 @@ class MHTMLCleaner:
         return html_content
     
     def _remove_sidenav_div(self, html_content: str) -> str:
-        """✅ FIX #4: Supprime <div class="sidenav">...</div>"""
+        """FIX #4: Supprime <div class="sidenav">...</div>"""
         if not self.remove_sidenav:
             return html_content
         
@@ -343,6 +378,7 @@ class MHTMLCleaner:
         try:
             if self.verbose:
                 print(f"📖 Lecture: {self.input_file}")
+                print(f"🔌 Port: {self.port}")
                 print(f"📄 Page: {self.main_page}")
                 print(f"📝 Format: {self.output_format.upper()}")
                 if self.remove_buttons:
@@ -398,9 +434,7 @@ class MHTMLCleaner:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='MHTML Cleaner v2.2.1 - Convertit MHTML en HTML',
-    )
+    parser = argparse.ArgumentParser(description='MHTML Cleaner v2.2.2 - Convertit MHTML en HTML')
     
     parser.add_argument('input_file', help='Fichier MHTML')
     parser.add_argument('-o', '--output', dest='output_file', required=True, help='Fichier de sortie')
