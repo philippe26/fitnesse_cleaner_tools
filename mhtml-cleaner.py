@@ -27,7 +27,7 @@ class MHTMLCleaner:
     
     def __init__(self, input_file: str, output_file: str, level: str = 'moderate', 
                  preserve_fitnesse: bool = False, preserve_css: bool = False,
-                 verbose: bool = False):
+                 verbose: bool = False, output_format: str = 'html'):
         """
         Initialise le nettoyeur.
         
@@ -38,6 +38,7 @@ class MHTMLCleaner:
             preserve_fitnesse: Conserver les liens FitNesse (liens cassés)
             preserve_css: Conserver les imports CSS même si inaccessibles
             verbose: Mode verbeux
+            output_format: Format de sortie ('html' ou 'mhtml')
         """
         self.input_file = input_file
         self.output_file = output_file
@@ -45,6 +46,7 @@ class MHTMLCleaner:
         self.preserve_fitnesse = preserve_fitnesse
         self.preserve_css = preserve_css
         self.verbose = verbose
+        self.output_format = output_format.lower()
         
         # Extraire le nom de la page principale
         self.main_page = self._extract_main_page_name()
@@ -315,7 +317,7 @@ class MHTMLCleaner:
 
     def clean(self) -> bool:
         """
-        Nettoie le fichier MHTML.
+        Nettoie le fichier MHTML et le convertit en HTML pur.
         
         Returns:
             True si succès, False sinon
@@ -325,6 +327,7 @@ class MHTMLCleaner:
                 print(f"📖 Lecture: {self.input_file}")
                 print(f"📄 Page principale détectée: {self.main_page}")
                 print(f"🔧 Niveau de nettoyage: {self.level}")
+                print(f"📝 Format de sortie: {self.output_format.upper()}")
                 print()
             
             with open(self.input_file, 'r', encoding='utf-8') as f:
@@ -346,12 +349,29 @@ class MHTMLCleaner:
             # ÉTAPE 3: Injecter les CSS FitNesse pour que la page soit stylisée
             html_cleaned = self._extract_and_inject_css(full_content, html_cleaned)
             
-            # ÉTAPE 4: Reconstruire le fichier MHTML avec le HTML nettoyé
-            cleaned_content = full_content[:html_start] + html_cleaned + full_content[html_end:]
-            
-            # Écrire le fichier de sortie
-            with open(self.output_file, 'w', encoding='utf-8') as f:
-                f.write(cleaned_content)
+            # ÉTAPE 4: Sauvegarder selon le format
+            if self.output_format == 'html':
+                # Convertir en HTML pur - extrait juste le HTML
+                if self.verbose:
+                    print("  🔄 Conversion: MHTML → HTML pur")
+                
+                # Supprimer les références cid: (ressources MHTML qui n'existent pas en HTML)
+                html_cleaned = re.sub(
+                    r'<link[^>]*href=["\']cid:[^"\']+["\'][^>]*>',
+                    '',
+                    html_cleaned,
+                    flags=re.IGNORECASE
+                )
+                
+                with open(self.output_file, 'w', encoding='utf-8') as f:
+                    f.write(html_cleaned)
+            else:
+                # Garder le format MHTML - reconstruit avec la structure multipart
+                if self.verbose:
+                    print("  🔄 Format: MHTML multipart preservé")
+                cleaned_content = full_content[:html_start] + html_cleaned + full_content[html_end:]
+                with open(self.output_file, 'w', encoding='utf-8') as f:
+                    f.write(cleaned_content)
             
             if self.verbose:
                 print(f"\n✅ Succès! Fichier nettoyé: {self.output_file}")
@@ -393,6 +413,9 @@ Exemples:
                         help='Préserver les liens FitNesse (générer des liens cassés)')
     parser.add_argument('-c', '--preserve-css', action='store_true',
                         help='Préserver les imports CSS FitNesse')
+    parser.add_argument('-f', '--format', choices=['html', 'mhtml'],
+                        default='html',
+                        help='Format de sortie: html (recommandé) ou mhtml (défaut: html)')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Mode verbeux - affiche les transformations')
     
@@ -410,7 +433,8 @@ Exemples:
         level=args.level,
         preserve_fitnesse=args.preserve_fitnesse,
         preserve_css=args.preserve_css,
-        verbose=args.verbose
+        verbose=args.verbose,
+        output_format=args.format
     )
     
     success = cleaner.clean()
