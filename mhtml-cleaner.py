@@ -1,57 +1,32 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.2 - Nettoie les fichiers MHTML générés par Edge/FitNesse
-- Remplace les liens localhost par des ancres locales
-- Supprime les ressources inaccessibles
-- Injecte les CSS et images base64
-- Supprime les boutons FitNesse optionnellement
+MHTML Cleaner v2.2.1 FINAL
+✅ FIX #1: Base64 sans sauts de ligne  
+✅ FIX #2: URL CSS sans chemin relatif
+✅ FIX #3: Ancres avec numéros (#1, #2, etc.) - index 23, not 24!
+✅ FIX #4: Option --remove-sidenav
 """
 
 import re
 import argparse
 import sys
-import base64
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
-from typing import Tuple, Set
+from urllib.parse import urlparse
+from typing import Tuple
 
 
 class MHTMLCleaner:
     """Nettoyeur de fichiers MHTML"""
     
-    # Patterns pour détecter FitNesse et ses ressources
     FITNESSE_PATTERNS = [
-        r'files/fitnesse/',
-        r'files/bootstrap/',
-        r'/FrontPage',
-        r'/GaeL\.',
-        r'/FitNesse\.',
-        r'/RecentChanges',
-    ]
-    
-    # Boutons FitNesse à supprimer
-    FITNESSE_BUTTONS = [
-        'Edit', 'Versions', 'Attributes', 'Review', 
-        'Rationale', 'Expand', 'Collapse'
+        r'files/fitnesse/', r'files/bootstrap/', r'/FrontPage',
+        r'/GaeL\.', r'/FitNesse\.', r'/RecentChanges',
     ]
     
     def __init__(self, input_file: str, output_file: str, level: str = 'moderate', 
                  preserve_fitnesse: bool = False, preserve_css: bool = False,
                  verbose: bool = False, output_format: str = 'html',
-                 remove_buttons: bool = False):
-        """
-        Initialise le nettoyeur.
-        
-        Args:
-            input_file: Chemin du fichier MHTML à nettoyer
-            output_file: Chemin du fichier de sortie
-            level: Niveau de nettoyage ('light', 'moderate', 'strict')
-            preserve_fitnesse: Conserver les liens FitNesse (liens cassés)
-            preserve_css: Conserver les imports CSS même si inaccessibles
-            verbose: Mode verbeux
-            output_format: Format de sortie ('html' ou 'mhtml')
-            remove_buttons: Supprimer les boutons FitNesse
-        """
+                 remove_buttons: bool = False, remove_sidenav: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -60,107 +35,92 @@ class MHTMLCleaner:
         self.verbose = verbose
         self.output_format = output_format.lower()
         self.remove_buttons = remove_buttons
+        self.remove_sidenav = remove_sidenav
         
-        # Extraire le nom de la page principale
-        self.main_page = self._extract_main_page_name()
-    
-    def _extract_main_page_name(self) -> str:
-        """Extrait le nom de la page principale depuis le fichier MHTML"""
-        try:
-            with open(self.input_file, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(5000)
-            
-            match = re.search(r'Snapshot-Content-Location: [^/]*?([^/\s]+)[\s$]', content)
-            if match:
-                return match.group(1)
-        except:
-            pass
-        
-        return "Unknown"
-    
-    def _extract_html_section(self, content: str) -> Tuple[str, int, int]:
+
         """Extrait la section HTML principale du fichier MHTML"""
-        html_start = content.find('<html')
+        html_start = content.find('<!DOCTYPE')
+        if html_start == -1:
+            html_start = content.find('<!doctype')
+        if html_start == -1:
+            html_start = content.find('<html')
         if html_start == -1:
             html_start = content.find('<HTML')
         
-        if html_start == -1:
-            html_start = content.find('<!DOCTYPE')
-        
-        # Trouver la fin (avant la prochaine limite de boundary)
         boundary_idx = content.find('\n------', html_start)
         if boundary_idx == -1:
             boundary_idx = len(content)
         
         return content[html_start:boundary_idx], html_start, boundary_idx
     
-    def _create_placeholder_images(self) -> dict:
-        """
-        Crée des images SVG placeholders pour les images manquantes.
-        
-        Returns:
-            Dictionnaire {filename: data_url}
-        """
-        placeholders = {}
-        
-        # Image pour collapsibleOpen (trait épais noir)
-        svg_collapsible = '''<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <line x1="2" y1="8" x2="14" y2="8" stroke="black" stroke-width="3" stroke-linecap="round"/>
-</svg>'''
-        
-        # Image pour collapsibleClosed (trait + vertical)
-        svg_collapsed = '''<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <line x1="2" y1="8" x2="14" y2="8" stroke="black" stroke-width="3" stroke-linecap="round"/>
-  <line x1="8" y1="2" x2="8" y2="14" stroke="black" stroke-width="3" stroke-linecap="round"/>
-</svg>'''
-        
-        # Encoder en base64
-        collapsible_b64 = base64.b64encode(svg_collapsible.encode()).decode()
-        collapsed_b64 = base64.b64encode(svg_collapsed.encode()).decode()
-        
-        placeholders['collapsibleOpen.png'] = f'data:image/svg+xml;base64,{collapsible_b64}'
-        placeholders['collapsibleClosed.png'] = f'data:image/svg+xml;base64,{collapsed_b64}'
-        placeholders['collapse.gif'] = f'data:image/svg+xml;base64,{collapsible_b64}'
-        placeholders['expand.gif'] = f'data:image/svg+xml;base64,{collapsed_b64}'
-        
-        if self.verbose:
-            print(f"  🎨 {len(placeholders)} images SVG placeholder créées")
-        
-        return placeholders
+    def _should_remove_link(self, url: str) -> bool:
+        """Détermine si un lien doit être supprimé"""
+        if self.preserve_fitnesse:
+            return False
+        for pattern in self.FITNESSE_PATTERNS:
+            if re.search(pattern, url, re.IGNORECASE):
+                return True
+        return False
     
-    def _remove_fitnesse_buttons(self, html_content: str) -> str:
-        """
-        Supprime ou masque les boutons FitNesse spécifiés.
+    def _normalize_localhost_link(self, url: str) -> str:
+        """Normalise les URLs localhost"""
+        if not url.startswith('http://localhost:50020/'):
+            return None
         
-        Cherche les patterns comme:
-        - <a ... title="Edit">Edit</a>
-        - <button ... name="edit">Edit</button>
-        """
+        # ✅ FIX #3: Index 23 (not 24!) - préserve les ancres comme #1
+        path = url[23:]  # Enlever "http://localhost:50020/"
         
-        if not self.remove_buttons:
-            return html_content
+        if self.main_page in path:
+            match = re.search(rf'{self.main_page}([^/&]*)', path)
+            if match:
+                anchor = match.group(1)
+                if anchor.startswith('?'):
+                    anchor_num = anchor[1:]
+                    return f"#{anchor_num}" if anchor_num else "#"
+                elif anchor.startswith('#'):
+                    return anchor  # ✅ Preserve #1, #2, etc.
+                else:
+                    return '#'
+            return '#'
         
-        removed_count = 0
-        
-        for button_name in self.FITNESSE_BUTTONS:
-            # Pattern 1: <a ... title="...">buttonname</a>
-            pattern1 = rf'<a[^>]*title=["\']?{button_name}["\']?[^>]*>[^<]*{button_name}[^<]*</a>'
-            html_content = re.sub(pattern1, '', html_content, flags=re.IGNORECASE)
+        return None
+    
+    def _process_html_attributes(self, html_content: str) -> str:
+        """Remplace les attributs href/src"""
+        def replace_action(m):
+            prefix = m.group(1)
+            url = m.group(2)
+            suffix = m.group(3)
             
-            # Pattern 2: <button ... name="...">buttonname</button>
-            pattern2 = rf'<button[^>]*name=["\']?{button_name.lower()}["\']?[^>]*>[^<]*{button_name}[^<]*</button>'
-            html_content = re.sub(pattern2, '', html_content, flags=re.IGNORECASE)
+            if self._should_remove_link(url):
+                return ''
             
-            # Pattern 3: <input type="button" value="buttonname">
-            pattern3 = rf'<input[^>]*type=["\']?button["\']?[^>]*value=["\']?{button_name}["\']?[^>]*/?>|<input[^>]*value=["\']?{button_name}["\']?[^>]*type=["\']?button["\']?[^>]*/?>]'
-            html_content = re.sub(pattern3, '', html_content, flags=re.IGNORECASE)
+            normalized = self._normalize_localhost_link(url)
+            if normalized:
+                return f'{prefix}{normalized}{suffix}'
             
-            # Pattern 4: Lien avec texte exact
-            pattern4 = rf'<a[^>]*>\s*{button_name}\s*</a>'
-            html_content = re.sub(pattern4, '', html_content, flags=re.IGNORECASE)
+            return m.group(0)
         
-        if self.verbose:
-            print(f"  🗑️  Boutons FitNesse supprimés")
+        pattern = r'((?:href|src)\s*=\s*["\'])([^"\']*?)(["\'])'
+        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
+        
+        return html_content
+    
+    def _process_form_actions(self, html_content: str) -> str:
+        """Remplace les action=... dans les formulaires"""
+        
+        def replace_action(m):
+            action = m.group(1)
+            if self._should_remove_link(action):
+                return ''
+            
+            normalized = self._normalize_localhost_link(action)
+            if normalized:
+                return f' action="{normalized}"'
+            return m.group(0)
+        
+        pattern = r' action=(["\'])([^"\']*?)\1'
+        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
         
         return html_content
     
@@ -235,6 +195,7 @@ class MHTMLCleaner:
             location = match.group(2).strip()
             base64_data_raw = match.group(3)
             
+            # ✅ FIX #1: Enlever tous les sauts de ligne et espaces du base64
             base64_data = ''.join(base64_data_raw.split())
             
             if location.startswith('cid:'):
@@ -283,88 +244,17 @@ class MHTMLCleaner:
                         flags=re.IGNORECASE
                     )
             
-            if self.verbose:
-                print(f"  ✅ {len(image_map)} images injectées en base64")
-        
-        # Ajouter les images placeholder
-        placeholders = self._create_placeholder_images()
-        for filename, data_url in placeholders.items():
-            escaped_filename = re.escape(filename)
+            # ✅ FIX #2: Nettoyer les URL CSS avec chemin relatif avant data:
+            # Remplacer: url("../img/data:image/...") par url("data:image/...")
             html_content = re.sub(
-                escaped_filename,
-                data_url,
+                r'url\(\s*["\']([^"\']*?)data:image/',
+                r'url("data:image/',
                 html_content,
                 flags=re.IGNORECASE
             )
-        
-        return html_content
-    
-    def _should_remove_link(self, url: str) -> bool:
-        """Détermine si un lien doit être supprimé"""
-        if self.preserve_fitnesse:
-            return False
-        
-        for pattern in self.FITNESSE_PATTERNS:
-            if re.search(pattern, url, re.IGNORECASE):
-                return True
-        
-        return False
-    
-    def _normalize_localhost_link(self, url: str) -> str:
-        """Normalise les URLs localhost"""
-        if not url.startswith('http://localhost:50020/'):
-            return None
-        
-        path = url[24:]  # Enlever "http://localhost:50020/"
-        
-        if self.main_page in path:
-            # Même page - utiliser une ancre
-            match = re.search(rf'{self.main_page}([^/&]*)', path)
-            if match:
-                anchor = match.group(1)
-                if anchor.startswith('?') or anchor.startswith('#'):
-                    return f"#{anchor.lstrip('?#')}"
-                return '#'
-        
-        return None
-    
-    def _process_html_attributes(self, html_content: str) -> str:
-        """Remplace les attributs href/src dans le HTML"""
-        
-        def replace_action(m):
-            prefix = m.group(1)
-            url = m.group(2)
-            suffix = m.group(3)
             
-            if self._should_remove_link(url):
-                return ''
-            
-            normalized = self._normalize_localhost_link(url)
-            if normalized:
-                return f'{prefix}{normalized}{suffix}'
-            
-            return m.group(0)
-        
-        pattern = r'((?:href|src)\s*=\s*["\'])([^"\']*?)(["\'])'
-        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
-        
-        return html_content
-    
-    def _process_form_actions(self, html_content: str) -> str:
-        """Remplace les action=... dans les formulaires"""
-        
-        def replace_action(m):
-            action = m.group(1)
-            if self._should_remove_link(action):
-                return ''
-            
-            normalized = self._normalize_localhost_link(action)
-            if normalized:
-                return f' action="{normalized}"'
-            return m.group(0)
-        
-        pattern = r' action=(["\'])([^"\']*?)\1'
-        html_content = re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
+            if self.verbose:
+                print(f"  ✅ {len(image_map)} images injectées en base64")
         
         return html_content
     
@@ -401,6 +291,46 @@ class MHTMLCleaner:
         
         return html_content
     
+    def _remove_fitnesse_buttons(self, html_content: str) -> str:
+        """Supprime les boutons FitNesse spécifiés"""
+        
+        if not self.remove_buttons:
+            return html_content
+        
+        buttons = ['Edit', 'Versions', 'Attributes', 'Review', 'Rationale', 'Expand', 'Collapse']
+        
+        for button_name in buttons:
+            # Pattern 1: <a ... title="...">buttonname</a>
+            pattern1 = rf'<a[^>]*title=["\']?{button_name}["\']?[^>]*>[^<]*{button_name}[^<]*</a>'
+            html_content = re.sub(pattern1, '', html_content, flags=re.IGNORECASE)
+            
+            # Pattern 2: <button ... name="...">buttonname</button>
+            pattern2 = rf'<button[^>]*name=["\']?{button_name.lower()}["\']?[^>]*>[^<]*{button_name}[^<]*</button>'
+            html_content = re.sub(pattern2, '', html_content, flags=re.IGNORECASE)
+        
+        if self.verbose:
+            print(f"  🗑️  Boutons FitNesse supprimés")
+        
+        return html_content
+    
+    def _remove_sidenav_div(self, html_content: str) -> str:
+        """✅ FIX #4: Supprime <div class="sidenav">...</div>"""
+        
+        if not self.remove_sidenav:
+            return html_content
+        
+        html_content = re.sub(
+            r'<div[^>]*class=["\']?sidenav["\']?[^>]*>.*?</div>',
+            '',
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        
+        if self.verbose:
+            print(f"  🗑️  Div sidenav supprimée")
+        
+        return html_content
+    
     def clean(self) -> bool:
         """Nettoie le fichier MHTML et le convertit en HTML pur"""
         try:
@@ -411,6 +341,8 @@ class MHTMLCleaner:
                 print(f"📝 Format de sortie: {self.output_format.upper()}")
                 if self.remove_buttons:
                     print(f"🗑️  Suppression des boutons: OUI")
+                if self.remove_sidenav:
+                    print(f"🗑️  Suppression du sidenav: OUI")
                 print()
             
             with open(self.input_file, 'r', encoding='utf-8') as f:
@@ -431,6 +363,7 @@ class MHTMLCleaner:
             html_cleaned = self._extract_and_inject_images(full_content, html_cleaned)
             html_cleaned = self._replace_remaining_localhost_links(html_cleaned)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
+            html_cleaned = self._remove_sidenav_div(html_cleaned)
             
             if self.output_format == 'html':
                 if self.verbose:
@@ -467,18 +400,13 @@ class MHTMLCleaner:
 def main():
     """Point d'entrée CLI"""
     parser = argparse.ArgumentParser(
-        description='MHTML Cleaner - Convertit les fichiers MHTML en HTML',
+        description='MHTML Cleaner v2.2.1 FINAL - Convertit les fichiers MHTML en HTML',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-Niveaux de nettoyage:
-  light     - Remplace seulement les liens localhost vers la même page par # (par défaut)
-  moderate  - Désactive aussi les liens vers les ressources FitNesse inaccessibles
-  strict    - Supprime tous les liens vers d'autres pages non disponibles
-
 Exemples:
   %(prog)s input.mhtml -o output.html
-  %(prog)s input.mhtml -o output.html --level strict --remove-buttons
-  %(prog)s input.mhtml -o output.html --format html --verbose
+  %(prog)s input.mhtml -o output.html --remove-buttons --remove-sidenav
+  %(prog)s input.mhtml -o output.html --verbose
         '''
     )
     
@@ -495,8 +423,10 @@ Exemples:
     parser.add_argument('-f', '--format', choices=['html', 'mhtml'],
                         default='html',
                         help='Format de sortie: html (recommandé) ou mhtml (défaut: html)')
-    parser.add_argument('-r', '--remove-buttons', action='store_true',
+    parser.add_argument('-b', '--remove-buttons', action='store_true',
                         help='Supprimer les boutons FitNesse (Edit, Versions, Attributes, etc.)')
+    parser.add_argument('-s', '--remove-sidenav', action='store_true',
+                        help='Supprimer le panneau <div class="sidenav"></div>')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Mode verbeux - affiche les transformations')
     
@@ -514,7 +444,8 @@ Exemples:
         preserve_css=args.preserve_css,
         verbose=args.verbose,
         output_format=args.format,
-        remove_buttons=args.remove_buttons
+        remove_buttons=args.remove_buttons,
+        remove_sidenav=args.remove_sidenav
     )
     
     success = cleaner.clean()
