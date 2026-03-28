@@ -74,6 +74,10 @@ class MHTMLCleaner:
     
     def _should_remove_link(self, url: str) -> bool:
         """Détermine si un lien doit être supprimé"""
+        # IMPORTANT: Ne JAMAIS supprimer les liens cid: (ressources MHTML embarquées)
+        if url.startswith('cid:'):
+            return False
+        
         # Ne rien supprimer en mode light
         if self.level == 'light':
             return False
@@ -270,6 +274,44 @@ class MHTMLCleaner:
         
         return content[html_start:boundary_idx], html_start, boundary_idx
     
+    def _extract_and_inject_css(self, full_content: str, html_content: str) -> str:
+        """Extrait les CSS FitNesse du MHTML et les injecte en <style> tags"""
+        
+        # Extraire toutes les sections CSS FitNesse du fichier MHTML
+        css_sections = re.findall(
+            r'Content-Location: (http://localhost:50020/files/fitnesse[^\n]+)\n\n(.+?)\n------',
+            full_content,
+            re.DOTALL
+        )
+        
+        if not css_sections:
+            if self.verbose:
+                print("  ℹ️  Aucun CSS FitNesse à injecter")
+            return html_content
+        
+        # Décoder et concaténer les CSS principaux
+        injected_css = []
+        for location, css_body in css_sections:
+            # Décoder quoted-printable
+            css_decoded = self._decode_quoted_printable_section(css_body)
+            injected_css.append(css_decoded)
+            
+            # Montrer seulement les CSS importants en verbose
+            if 'fitnesse_wiki' in location or 'fitnesse-bootstrap' in location:
+                if self.verbose:
+                    size_kb = len(css_decoded) // 1024
+                    print(f"  ✅ CSS injecté: {location.split('/')[-1]} ({size_kb}KB)")
+        
+        combined_css = "\n\n".join(injected_css)
+        
+        # Injecter dans le HTML juste avant </head>
+        style_tag = f'<style type="text/css">\n{combined_css}\n</style>'
+        html_content = html_content.replace('</head>', f'{style_tag}\n</head>')
+        
+        if self.verbose:
+            print(f"  📝 Style tag injecté: {len(combined_css) // 1024}KB de CSS")
+        
+        return html_content
 
     def clean(self) -> bool:
         """
@@ -301,8 +343,10 @@ class MHTMLCleaner:
             html_cleaned = self._process_html_attributes(html_decoded)
             html_cleaned = self._process_form_actions(html_cleaned)
             
-            # ÉTAPE 3: Reconstruire le fichier
-            # On doit garder le fichier original mais avec le HTML remplacé
+            # ÉTAPE 3: Injecter les CSS FitNesse pour que la page soit stylisée
+            html_cleaned = self._extract_and_inject_css(full_content, html_cleaned)
+            
+            # ÉTAPE 4: Reconstruire le fichier MHTML avec le HTML nettoyé
             cleaned_content = full_content[:html_start] + html_cleaned + full_content[html_end:]
             
             # Écrire le fichier de sortie

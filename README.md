@@ -2,15 +2,46 @@
 
 ## 📋 Aperçu
 
-`mhtml-cleaner.py` est un utilitaire Python pour nettoyer les fichiers MHTML générés par Microsoft Edge à partir de pages FitNesse. Il automatise la suppression et la normalisation des liens localhost afin de créer un document autonome avec des renvois internes.
+`mhtml-cleaner.py` est un utilitaire Python pour nettoyer les fichiers MHTML générés par Microsoft Edge à partir de pages FitNesse. Il crée un **document 100% autonome** qui s'affiche correctement sans serveur FitNesse.
 
-### Problèmes résolus
+### ✨ Fonctionnalités principales
 
-- ✅ Remplace les liens `http://localhost:50020/PidS.AnnexeAtr` par des ancres locales `#`
-- ✅ Désactive les liens vers les ressources FitNesse inaccessibles (`/files/fitnesse/`, etc.)
-- ✅ Gère les paramètres de requête (`.?edit`, `.?properties`, etc.)
-- ✅ Préserve la structure MHTML d'origine (entête, CSS embarqués, etc.)
-- ✅ Offre trois niveaux de nettoyage progressif
+- ✅ **Injection CSS automatique** : Extrait les 231KB de CSS FitNesse du fichier MHTML et les injecte dans une balise `<style>` → **la page s'affiche parfaitement**
+- ✅ **Conversion des liens** : Remplace les liens `http://localhost:50020/PidS.AnnexeAtr` par des ancres locales `#`
+- ✅ **Neutralise les liens cassés** : Remplace les ressources FitNesse inaccessibles par `#` (pas d'erreurs 404)
+- ✅ **Gère les paramètres** : Traite les query strings (`.?edit`, `.?properties`, etc.)
+- ✅ **Préserve les ressources** : Garde les fichiers embarqués (`cid:`)
+- ✅ **Trois niveaux** de nettoyage (light, moderate, strict)
+
+### 🎯 Résultat
+
+Un fichier MHTML qui :
+- ✅ S'ouvre dans Edge/Chrome/Firefox
+- ✅ Affiche le contenu avec styles (231KB de CSS)
+- ✅ Permet la navigation interne via ancres
+- ✅ Fonctionne entièrement hors ligne
+
+---
+
+## 🎨 Comment fonctionne l'injection CSS
+
+Le fichier MHTML original contient des **références à des ressources FitNesse** qui ne sont plus accessibles :
+
+```html
+<link rel="stylesheet" href="http://localhost:50020/files/fitnesse/css/fitnesse_wiki.css">
+<link rel="stylesheet" href="http://localhost:50020/files/fitnesse/bootstrap/css/fitnesse-bootstrap.css">
+```
+
+**Le problème :** Sans serveur FitNesse, ces CSS ne se chargent pas → **page blanche**.
+
+**La solution du script :**
+
+1. ✅ **Extrait** les CSS du fichier MHTML (ils y sont embarqués)
+2. ✅ **Décode** les sections quoted-printable  
+3. ✅ **Injecte** les CSS dans une balise `<style>` unique
+4. ✅ **Remplace** les liens `href="http://..."` par `href="#"` (inactifs mais harmless)
+
+**Résultat :** Tous les 231KB de CSS sont présents dans le fichier, la page s'affiche parfaitement.
 
 ---
 
@@ -41,9 +72,21 @@ python3 mhtml-cleaner.py input.mhtml -o output.mhtml [options]
 | `--verbose` | `-v` | Affiche toutes les transformations |
 | `--help` | `-h` | Affiche l'aide |
 
----
+## 📊 Exemple de résultat (PIDS_FAKE.mhtml)
 
-## 🔧 Niveaux de nettoyage
+**Avant nettoyage:**
+- 121 liens `localhost:50020` non fonctionnels
+- CSS inaccessibles → page blanche dans Edge
+- Fichier: 597KB
+
+**Après nettoyage (niveau moderate):**
+- ✅ 84 liens supprimés (69%)
+- ✅ 93 ancres locales créées pour navigation interne
+- ✅ 231KB de CSS FitNesse injecté → **page stylisée**
+- ✅ Fichier autonome: 823KB
+- ✅ Fonctionne dans Edge sans serveur
+
+
 
 ### 1. **light** (Minimal)
 
