@@ -38,7 +38,7 @@ class MHTMLCleaner:
     def __init__(self, input_file: str, output_file: str, level: str = 'moderate', 
                  preserve_fitnesse: bool = False, preserve_css: bool = False,
                  verbose: bool = False, output_format: str = 'html',
-                 remove_buttons: bool = False):
+                 remove_buttons: bool = False, remove_sidenav: bool = False):
         """
         Initialise le nettoyeur.
         
@@ -51,6 +51,7 @@ class MHTMLCleaner:
             verbose: Mode verbeux
             output_format: Format de sortie ('html' ou 'mhtml')
             remove_buttons: Supprimer les boutons FitNesse
+            remove_sidenav: Supprimer le panneau de navigation latéral
         """
         self.input_file = input_file
         self.output_file = output_file
@@ -60,6 +61,7 @@ class MHTMLCleaner:
         self.verbose = verbose
         self.output_format = output_format.lower()
         self.remove_buttons = remove_buttons
+        self.remove_sidenav = remove_sidenav
         
         # Extraire le nom de la page principale
         self.main_page = self._extract_main_page_name()
@@ -225,6 +227,95 @@ class MHTMLCleaner:
         
         if self.verbose:
             print(f"  📝 Style tag injecté: {len(combined_css) // 1024}KB de CSS")
+        
+        return html_content
+    
+    def _clean_css_data_urls(self, html_content: str) -> str:
+        """
+        Nettoie les CSS contenant des data URLs malformées.
+        Corrige les patterns comme: url("../../images/data:image/...")
+        En: url("data:image/...")
+        """
+        # Pattern: url("...chemin.../data:image/...")
+        # Extraire juste la partie data: en supprimant le chemin avant
+        pattern = r'url\(["\']([^"\']*?)(data:image/[^"\']*)["\']'
+        html_content = re.sub(
+            pattern,
+            r'url("\2")',
+            html_content,
+            flags=re.IGNORECASE
+        )
+        
+        # Pattern 2: url(data:image/...) sans guillemets (rare mais possible)
+        pattern2 = r'url\(([^)]*?)(data:image/[^)]+)\)'
+        html_content = re.sub(
+            pattern2,
+            r'url("\2")',
+            html_content,
+            flags=re.IGNORECASE
+        )
+        
+        if self.verbose:
+            print(f"  🔧 CSS data URLs nettoyées")
+        
+        return html_content
+    
+    def _remove_sidenav(self, html_content: str) -> str:
+        """
+        Supprime le panneau de navigation latéral (sidenav/sidebar).
+        """
+        if not self.remove_sidenav:
+            return html_content
+        
+        # Pattern 1: <div id="sidenav" ...>...</div>
+        html_content = re.sub(
+            r'<div[^>]*(?:id|class)=["\']?[^"\']*sidenav[^"\']*["\']?[^>]*>.*?</div>',
+            '',
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        
+        # Pattern 2: <nav class="sidenav" ...>...</nav>
+        html_content = re.sub(
+            r'<nav[^>]*sidenav[^>]*>.*?</nav>',
+            '',
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        
+        # Pattern 3: <aside id="sidebar" ...>...</aside>
+        html_content = re.sub(
+            r'<aside[^>]*(?:id|class)=["\']?[^"\']*(?:sidebar|sidenav)[^"\']*["\']?[^>]*>.*?</aside>',
+            '',
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        
+        # Pattern 4: Éléments avec class contenant "sidenav" ou "sidebar"
+        html_content = re.sub(
+            r'<[^>]*class=["\']([^"\']*(?:sidenav|sidebar)[^"\']*)["\'][^>]*>.*?</[^>]+>',
+            '',
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        
+        # Également supprimer le CSS associé
+        html_content = re.sub(
+            r'/\*[\s\S]*?\.sidenav[\s\S]*?\*/|\.sidenav[^{]*{[^}]*}',
+            '',
+            html_content,
+            flags=re.IGNORECASE
+        )
+        
+        html_content = re.sub(
+            r'/\*[\s\S]*?\.sidebar[\s\S]*?\*/|\.sidebar[^{]*{[^}]*}',
+            '',
+            html_content,
+            flags=re.IGNORECASE
+        )
+        
+        if self.verbose:
+            print(f"  🗑️  Panneau sidenav supprimé")
         
         return html_content
     
@@ -416,6 +507,8 @@ class MHTMLCleaner:
                 print(f"📝 Format de sortie: {self.output_format.upper()}")
                 if self.remove_buttons:
                     print(f"🗑️  Suppression des boutons: OUI")
+                if self.remove_sidenav:
+                    print(f"🗑️  Suppression du sidenav: OUI")
                 print()
             
             with open(self.input_file, 'r', encoding='utf-8') as f:
@@ -435,7 +528,9 @@ class MHTMLCleaner:
             html_cleaned = self._extract_and_inject_css(full_content, html_cleaned)
             html_cleaned = self._extract_and_inject_images(full_content, html_cleaned)
             html_cleaned = self._replace_remaining_localhost_links(html_cleaned)
+            html_cleaned = self._clean_css_data_urls(html_cleaned)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
+            html_cleaned = self._remove_sidenav(html_cleaned)
             
             if self.output_format == 'html':
                 if self.verbose:
@@ -502,6 +597,8 @@ Exemples:
                         help='Format de sortie: html (recommandé) ou mhtml (défaut: html)')
     parser.add_argument('-r', '--remove-buttons', action='store_true',
                         help='Supprimer les boutons FitNesse (Edit, Versions, Attributes, etc.)')
+    parser.add_argument('-s', '--remove-sidenav', action='store_true',
+                        help='Supprimer le panneau de navigation latéral (sidenav)')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Mode verbeux - affiche les transformations')
     
@@ -519,7 +616,8 @@ Exemples:
         preserve_css=args.preserve_css,
         verbose=args.verbose,
         output_format=args.format,
-        remove_buttons=args.remove_buttons
+        remove_buttons=args.remove_buttons,
+        remove_sidenav=args.remove_sidenav
     )
     
     success = cleaner.clean()
