@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.4 - Converts MHTML files to standalone HTML
+MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.5'
+__version__ = '2.6'
 
 import re
 import csv
@@ -40,7 +40,8 @@ class MHTMLCleaner:
                  verbose: bool = False,
                  remove_buttons: bool = False, remove_sidenav: bool = False,
                  database_file: str = None,
-                 include_hovering: bool = False):
+                 include_hovering: bool = False,
+                 include_review: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -50,6 +51,7 @@ class MHTMLCleaner:
         self.remove_sidenav = remove_sidenav
         self.database_file = database_file
         self.include_hovering = include_hovering
+        self.include_review = include_review
 
         self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
@@ -521,6 +523,248 @@ class MHTMLCleaner:
         pattern = r'<a\s[^>]*href="(#[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+)"[^>]*>'
         return re.sub(pattern, add_title, html_content, flags=re.IGNORECASE)
 
+    def _inject_review_system(self, html_content: str) -> str:
+        """Injects CSS + JS for a right-click review annotation system.
+
+        Right-clicking any artifact div (with a non-empty artifact-type attribute)
+        opens a context menu with Add Major / Add Minor / Add Comment.
+        Reviews are persisted in localStorage and displayed below each artifact
+        as <div class="review"> blocks.
+        """
+        css_js = r"""
+<style id="review-system-style">
+/* Context menu */
+#review-context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 2px 4px 10px rgba(0,0,0,0.2);
+  min-width: 175px;
+  padding: 4px 0;
+  font-size: 0.9em;
+  font-family: sans-serif;
+}
+.review-menu-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.review-menu-item:hover { background: #e8f0fe; }
+.review-menu-sep { border-top: 1px solid #e0e0e0; margin: 4px 0; }
+.review-menu-user { color: #666; font-style: italic; font-size: 0.85em; }
+/* Review blocks */
+div.review { margin: 0 0 6px 0; }
+.review-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border-left: 3px solid #ccc;
+  margin: 2px 0;
+  font-size: 0.85em;
+  font-family: sans-serif;
+  background: #fafafa;
+}
+.review-entry.review-major   { border-left-color: #e53935; background: #fff5f5; }
+.review-entry.review-minor   { border-left-color: #fb8c00; background: #fff8f0; }
+.review-entry.review-comment { border-left-color: #1e88e5; background: #f0f4ff; }
+.review-badge {
+  font-weight: bold;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #fff;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.review-major   .review-badge { background: #e53935; }
+.review-minor   .review-badge { background: #fb8c00; }
+.review-comment .review-badge { background: #1e88e5; }
+.review-meta  { color: #888; font-size: 0.85em; white-space: nowrap; flex-shrink: 0; }
+.review-text  { color: #333; }
+</style>
+<script id="review-system-script">
+(function() {
+  // localStorage keys — scoped to document title so multiple docs coexist
+  var DOC_KEY   = 'mhtml-reviews:' + (document.title || location.pathname);
+  var USER_KEY  = 'mhtml-review-user';
+
+  // ── Persistence ──────────────────────────────────────────────────────────
+  function loadReviews() {
+    try { return JSON.parse(localStorage.getItem(DOC_KEY) || '[]'); }
+    catch(e) { return []; }
+  }
+  function saveReviews(reviews) {
+    localStorage.setItem(DOC_KEY, JSON.stringify(reviews));
+  }
+  function getUser() { return localStorage.getItem(USER_KEY) || ''; }
+  function setUser(u) { localStorage.setItem(USER_KEY, u); }
+
+  // ── Render review entries below an artifact div ───────────────────────────
+  function renderReviews(artifactId) {
+    var block = document.getElementById('review-block-' + CSS.escape(artifactId));
+    if (!block) return;
+    block.innerHTML = '';
+    loadReviews()
+      .filter(function(r) { return r.artifact === artifactId; })
+      .forEach(function(r) {
+        var entry = document.createElement('div');
+        entry.className = 'review-entry review-' + r.context.toLowerCase();
+        var badge = document.createElement('span');
+        badge.className = 'review-badge';
+        badge.textContent = r.context;
+        var meta = document.createElement('span');
+        meta.className = 'review-meta';
+        meta.textContent = r.user + ' — ' + r.date;
+        var text = document.createElement('span');
+        text.className = 'review-text';
+        text.textContent = r.text;
+        entry.appendChild(badge);
+        entry.appendChild(meta);
+        entry.appendChild(text);
+        block.appendChild(entry);
+      });
+  }
+
+  // ── Insert review blocks after each non-container artifact div ────────────
+  function initReviewBlocks() {
+    document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
+      if (!div.getAttribute('artifact-type')) return;   // skip empty containers
+      var aid = div.getAttribute('artifact');
+      if (!aid) return;
+      var block = document.createElement('div');
+      block.id = 'review-block-' + CSS.escape(aid);
+      block.className = 'review';
+      div.parentNode.insertBefore(block, div.nextSibling);
+      renderReviews(aid);
+    });
+  }
+
+  // ── Context menu ──────────────────────────────────────────────────────────
+  var menu = document.createElement('div');
+  menu.id = 'review-context-menu';
+  menu.style.display = 'none';
+  document.body.appendChild(menu);
+
+  function showMenu(x, y, artifactId) {
+    menu.innerHTML = '';
+    ['Major', 'Minor', 'Comment'].forEach(function(ctx) {
+      var item = document.createElement('div');
+      item.className = 'review-menu-item';
+      item.textContent = 'Add ' + ctx;
+      item.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+      item.addEventListener('click', function(e) {
+        e.stopPropagation();
+        hideMenu();
+        addReview(artifactId, ctx);
+      });
+      menu.appendChild(item);
+    });
+    var sep = document.createElement('div');
+    sep.className = 'review-menu-sep';
+    menu.appendChild(sep);
+    var userItem = document.createElement('div');
+    userItem.className = 'review-menu-item review-menu-user';
+    var u = getUser();
+    userItem.textContent = u ? 'Change user (' + u + ')' : 'Set user name…';
+    userItem.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    userItem.addEventListener('click', function(e) {
+      e.stopPropagation();
+      hideMenu();
+      promptUser(true);
+    });
+    menu.appendChild(userItem);
+
+    menu.style.display = 'block';
+    var mw = menu.offsetWidth, mh = menu.offsetHeight;
+    var vw = window.innerWidth,  vh = window.innerHeight;
+    menu.style.left = (x + mw > vw - 8 ? vw - mw - 8 : x) + 'px';
+    menu.style.top  = (y + mh > vh - 8 ? vh - mh - 8 : y) + 'px';
+  }
+
+  function hideMenu() { menu.style.display = 'none'; }
+  document.addEventListener('click', hideMenu);
+  document.addEventListener('contextmenu', function(e) {
+    // hide menu if click is outside an artifact div
+    if (!e.target.closest('[artifact-type]')) hideMenu();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') hideMenu();
+  });
+
+  // ── User name ─────────────────────────────────────────────────────────────
+  function promptUser(force) {
+    var u = getUser();
+    if (!force && u) return u;
+    var name = window.prompt('Enter your user name (login):', u || '');
+    if (name === null) return u;
+    name = name.trim();
+    if (name) setUser(name);
+    return name || u;
+  }
+
+  // ── Add a review ──────────────────────────────────────────────────────────
+  function addReview(artifactId, context) {
+    var user = promptUser(false);
+    if (!user) {
+      window.alert('Please set your user name first (right-click → Set user name).');
+      return;
+    }
+    var text = window.prompt('[' + context + '] ' + artifactId, '');
+    if (text === null) return;
+    text = text.trim();
+    if (!text) return;
+
+    var now = new Date();
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    var dateStr = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
+                + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+
+    var reviews = loadReviews();
+    reviews.push({ user: user, artifact: artifactId, context: context, text: text, date: dateStr });
+    saveReviews(reviews);
+    renderReviews(artifactId);
+  }
+
+  // ── Attach right-click listeners ──────────────────────────────────────────
+  function attachContextMenus() {
+    document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
+      if (!div.getAttribute('artifact-type')) return;
+      var aid = div.getAttribute('artifact');
+      if (!aid) return;
+      div.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        showMenu(e.clientX, e.clientY, aid);
+      });
+    });
+  }
+
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+      initReviewBlocks();
+      attachContextMenus();
+    });
+  } else {
+    initReviewBlocks();
+    attachContextMenus();
+  }
+})();
+</script>
+"""
+        if '</body>' in html_content:
+            html_content = html_content.replace('</body>', css_js + '\n</body>', 1)
+        else:
+            html_content += css_js
+
+        if self.verbose:
+            print("  📝 Review annotation system injected")
+        return html_content
+
     def _inject_hovering(self, html_content: str) -> str:
         """Injects CSS + JS for artifact hover tooltips.
 
@@ -649,6 +893,8 @@ class MHTMLCleaner:
             html_cleaned = self._remove_sidenav_div(html_cleaned)
             if self.include_hovering:
                 html_cleaned = self._inject_hovering(html_cleaned)
+            if self.include_review:
+                html_cleaned = self._inject_review_system(html_cleaned)
 
             if self.verbose:
                 print("  🔄 MHTML → HTML")
@@ -686,6 +932,8 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true')
     parser.add_argument('-H', '--include-hovering', action='store_true',
                         help='Inject JS hover tooltips showing artifact definitions')
+    parser.add_argument('-R', '--include-review', action='store_true',
+                        help='Inject review annotation system (right-click on artifacts)')
     parser.add_argument('--version', action='version', version=f'mhtml-cleaner {__version__}')
     parser.add_argument('-V', '--validate', action='store_true',
                         help='Run HTML validator on output file after cleaning')
@@ -717,6 +965,7 @@ def main():
         remove_buttons=args.remove_buttons,
         remove_sidenav=args.remove_sidenav,
         include_hovering=args.include_hovering,
+        include_review=args.include_review,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
             if args.database_file and not args.database_file.endswith('.csv')

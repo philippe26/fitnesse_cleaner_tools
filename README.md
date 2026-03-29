@@ -51,6 +51,7 @@ python3 mhtml-cleaner.py input.mhtml [options]
 | `--remove-buttons` | `-b` | off | Remove editing buttons |
 | `--remove-sidenav` | `-s` | off | Remove the side navigation panel |
 | `--include-hovering` | `-H` | off | Inject JS hover tooltips for artifact links |
+| `--include-review` | `-R` | off | Inject right-click review annotation system |
 | `--all` | `-A` | off | Preset: enables `-b`, `-s`, `-v`, `-V`, `-H` |
 | `--verbose` | `-v` | off | Print details of each transformation |
 | `--validate` | `-V` | off | Run HTML validator on output after cleaning |
@@ -184,6 +185,34 @@ The native browser `title=` tooltip is suppressed when this option is active (bo
 
 ---
 
+## Review annotation system (`--include-review` / `-R`)
+
+When active, right-clicking any artifact div (elements with a non-empty `artifact-type` attribute) opens a context menu:
+
+- **Add Major** — a blocking / critical issue
+- **Add Minor** — a non-blocking issue
+- **Add Comment** — a general remark
+
+Clicking a menu item opens a single-line text prompt (`OK` / `Cancel`). On OK, the review is saved to the browser's `localStorage` with:
+
+| Field | Description |
+|-------|-------------|
+| `user` | Reviewer login (set once via _Set user name…_ in the menu) |
+| `artifact` | Full artifact id (`PidS.DeF.EquipmentPosition`) |
+| `context` | `Major`, `Minor`, or `Comment` |
+| `text` | Free-form annotation text |
+| `date` | Timestamp at time of entry (`YYYY-MM-DD HH:MM`) |
+
+Reviews are loaded automatically every time the page opens and displayed inline, just below the corresponding artifact div, as `<div class="review">` blocks. Each entry shows a coloured badge (red = Major, orange = Minor, blue = Comment), the author and date, and the text.
+
+The user name is set via **Set user name…** (bottom of the menu) and persists across sessions. It can be changed at any time via **Change user (…)**.
+
+Review data is scoped to the document title, so multiple documents opened in the same browser do not interfere with each other.
+
+> **Note:** reviews are stored in `localStorage` — they are local to the browser and are not written back to the HTML file. To share reviews, export `localStorage` manually or use the browser's developer tools.
+
+---
+
 ## Processing pipeline
 
 1. Read MHTML file and detect port
@@ -198,9 +227,10 @@ The native browser `title=` tooltip is suppressed when this option is active (bo
 10. Remove buttons _(if `-b` or `-A`)_
 11. Remove sidebar _(if `-s` or `-A`)_
 12. Inject hover JS+CSS _(if `-H`)_
-13. Remove `cid:` references (MHTML-specific)
-14. Save as plain HTML
-15. Run validator _(if `-V`)_
+13. Inject review annotation system _(if `-R`)_
+14. Remove `cid:` references (MHTML-specific)
+15. Save as plain HTML
+16. Run validator _(if `-V`)_
 
 ---
 

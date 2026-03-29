@@ -2,6 +2,21 @@
 
 ---
 
+## v2.6 — 2026-03-29
+
+### New: `--include-review` / `-R`
+Injects a right-click review annotation system into the output HTML.
+
+Right-clicking any artifact div (those with a non-empty `artifact-type` attribute) opens a context menu with three choices: **Add Major**, **Add Minor**, **Add Comment**. Clicking one prompts for a single line of text (OK / Cancel). On OK, the review is stored in `localStorage` with the following fields: user (login), artifact id, context (Major/Minor/Comment), text, and timestamp.
+
+Reviews are loaded from `localStorage` on every page open and displayed inline below each artifact as `<div class="review">` blocks. Each entry shows a coloured badge (red = Major, orange = Minor, blue = Comment), the author name and date, and the review text.
+
+The user name is set once via **Set user name…** in the menu (bottom item) and persisted across sessions. It can be changed at any time via **Change user (…)** in the same slot.
+
+Review data is scoped to the document title, so multiple documents coexist in the same browser without interference.
+
+---
+
 ## v2.5 — 2026-03-29
 
 ### New: `--include-hovering` / `-H`
