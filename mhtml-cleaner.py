@@ -573,6 +573,38 @@ class MHTMLCleaner:
 #rv-btn.connected:hover { background: #1b5e20; }
 #rv-label { color: #455a64; font-size: .82em; }
 
+/* ── File-picker dialog ───────────────────────────── */
+#rv-picker-overlay {
+  position: fixed; inset: 0; z-index: 10010;
+  background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center;
+}
+#rv-picker-box {
+  background: #fff; border-radius: 8px; padding: 24px 28px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3); min-width: 320px;
+  font-family: sans-serif;
+}
+#rv-picker-box h3 {
+  margin: 0 0 6px; font-size: 1em; color: #263238;
+}
+#rv-picker-box p {
+  margin: 0 0 18px; font-size: .83em; color: #607d8b; line-height: 1.4;
+}
+.rv-picker-btn {
+  display: block; width: 100%; margin: 0 0 10px;
+  padding: 9px 14px; font-size: .9em; font-weight: bold;
+  border: 1px solid #b0bec5; border-radius: 5px;
+  background: #eceff1; color: #263238; cursor: pointer;
+  text-align: left; transition: background .12s;
+}
+.rv-picker-btn:hover { background: #cfd8dc; }
+.rv-picker-cancel {
+  display: block; width: 100%; padding: 6px;
+  font-size: .8em; color: #90a4ae; background: none;
+  border: none; cursor: pointer; text-align: center; margin-top: 4px;
+}
+.rv-picker-cancel:hover { color: #546e7a; }
+
 /* ── Context menu ─────────────────────────────────── */
 #review-context-menu {
   position: fixed; z-index: 10002;
@@ -749,19 +781,56 @@ class MHTMLCleaner:
     }
   }
 
+  /* ── File-picker mini-dialog ────────────────────────────────────── */
+  function _showPickerDialog() {
+    return new Promise(function(resolve) {
+      var overlay = document.createElement('div');
+      overlay.id = 'rv-picker-overlay';
+      overlay.innerHTML =
+        '<div id="rv-picker-box">' +
+          '<h3>\uD83D\uDCC2 Review file</h3>' +
+          '<p>Choose whether to open an existing review file<br>or create a new one.</p>' +
+          '<button class="rv-picker-btn" id="rv-pick-open">' +
+            '\uD83D\uDCC2\u00a0Open existing file\u2026' +
+          '</button>' +
+          '<button class="rv-picker-btn" id="rv-pick-new">' +
+            '\uD83C\uDD95\u00a0Create new file \u2014 ' + SUGGESTED +
+          '</button>' +
+          '<button class="rv-picker-cancel" id="rv-pick-cancel">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      function done(choice) { overlay.remove(); resolve(choice); }
+      document.getElementById('rv-pick-open').onclick   = function() { done('open'); };
+      document.getElementById('rv-pick-new').onclick    = function() { done('new'); };
+      document.getElementById('rv-pick-cancel').onclick = function() { done(null); };
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) done(null); });
+    });
+  }
+
   window._rvConnect = async function() {
-    if (!window.showSaveFilePicker) {
+    if (!window.showSaveFilePicker || !window.showOpenFilePicker) {
       alert('File System Access API not available.\nUse Chrome or Edge (v86+) for file persistence.');
       return;
     }
+    var choice = await _showPickerDialog();
+    if (!choice) return;
+    var h = null;
     try {
-      var h = await window.showSaveFilePicker({
-        suggestedName: SUGGESTED,
-        types: [{ description: 'Review JSON', accept: {'application/json': ['.json']} }]
-      });
-      var ok = await _fileConnect(h);
-      if (ok) { _setConnected(true, h.name); _renderAll(); }
-    } catch(e) { /* user cancelled */ }
+      if (choice === 'open') {
+        var picks = await window.showOpenFilePicker({
+          types: [{ description: 'Review JSON', accept: {'application/json': ['.json']} }],
+          multiple: false
+        });
+        h = picks[0];
+      } else {
+        h = await window.showSaveFilePicker({
+          suggestedName: SUGGESTED,
+          types: [{ description: 'Review JSON', accept: {'application/json': ['.json']} }]
+        });
+      }
+    } catch(e) { return; /* user cancelled picker */ }
+    var ok = await _fileConnect(h);
+    if (ok) { _setConnected(true, h.name); _renderAll(); }
   };
 
   /* ── Render ─────────────────────────────────────────────────────── */

@@ -187,29 +187,190 @@ The native browser `title=` tooltip is suppressed when this option is active (bo
 
 ## Review annotation system (`--include-review` / `-R`)
 
-When active, right-clicking any artifact div (elements with a non-empty `artifact-type` attribute) opens a context menu:
+The review system lets readers annotate artifacts directly inside the generated HTML file, without a server or a shared database. Annotations are stored in a local JSON file on disk and displayed inline below each artifact.
 
-- **Add Major** — a blocking / critical issue
-- **Add Minor** — a non-blocking issue
-- **Add Comment** — a general remark
+### Enabling
 
-Clicking a menu item opens a single-line text prompt (`OK` / `Cancel`). On OK, the review is saved to the browser's `localStorage` with:
+```bash
+python3 mhtml-cleaner.py input.mhtml -R
+python3 mhtml-cleaner.py input.mhtml -R -H    # combined with hover tooltips
+```
 
-| Field | Description |
-|-------|-------------|
-| `user` | Reviewer login (set once via _Set user name…_ in the menu) |
-| `artifact` | Full artifact id (`PidS.DeF.EquipmentPosition`) |
-| `context` | `Major`, `Minor`, or `Comment` |
-| `text` | Free-form annotation text |
-| `date` | Timestamp at time of entry (`YYYY-MM-DD HH:MM`) |
+The `-R` flag injects a connect banner, a right-click context menu, and review display blocks into the output HTML. The file is 100% self-contained and works offline.
 
-Reviews are loaded automatically every time the page opens and displayed inline, just below the corresponding artifact div, as `<div class="review">` blocks. Each entry shows a coloured badge (red = Major, orange = Minor, blue = Comment), the author and date, and the text.
+> **Browser requirement:** the file-persistence feature uses the [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API), which requires **Chrome or Edge v86+**. The review blocks still display in any browser using the `localStorage` cache, but writing to a JSON file only works in Chrome/Edge.
 
-The user name is set via **Set user name…** (bottom of the menu) and persists across sessions. It can be changed at any time via **Change user (…)**.
+---
 
-Review data is scoped to the document title, so multiple documents opened in the same browser do not interfere with each other.
+### Connect banner
 
-> **Note:** reviews are stored in `localStorage` — they are local to the browser and are not written back to the HTML file. To share reviews, export `localStorage` manually or use the browser's developer tools.
+When the HTML file is opened, a sticky grey-blue banner appears at the very top of the page:
+
+```
+[ 📂 CONNECT JSON REVIEW FILE ]   Reviews disabled — connect a file to enable editing
+```
+
+This banner is always visible, even when scrolling. Until a file is connected, the right-click context menu is visible but greyed out — no annotations can be added.
+
+Clicking the button opens a small in-page dialog with two choices:
+
+| Choice | Browser dialog | When to use |
+|--------|----------------|-------------|
+| **📂 Open existing file…** | Standard "Open" dialog — no overwrite warning | The JSON file already exists (e.g. a colleague sent it to you) |
+| **🆕 Create new file** | Standard "Save As" dialog | First use, no file exists yet |
+
+Once connected, the banner changes to:
+
+```
+[ 💾 CONNECTED: PIDS_review.json ]   philippe — right-click any artifact to add a review
+```
+
+---
+
+### User name
+
+The reviewer's name is detected automatically from the OS session path:
+
+| OS | Path example | Detected login |
+|----|-------------|----------------|
+| Linux | `/home/philippe/docs/PIDS.html` | `philippe` |
+| macOS | `/Users/john/Documents/PIDS.html` | `john` |
+| Windows | `C:/Users/alice/...` | `alice` |
+
+If detection fails, or to override it, right-click any artifact and select the user name item at the bottom of the context menu (e.g. `👤 philippe (change…)`).
+
+The name is stored in `localStorage` and persists across browser sessions.
+
+---
+
+### Adding a review
+
+Right-click any artifact (any section with a coloured border visible on hover) to open the context menu:
+
+```
+🔴 Add Major
+🟠 Add Minor
+🔵 Add Comment
+──────────────
+👤 philippe (change…)
+```
+
+- **Major** — blocking issue, non-conformity, or requirement violation
+- **Minor** — non-blocking issue, suggestion, or improvement
+- **Comment** — general remark, question, or observation
+
+Clicking a menu item opens a standard browser `prompt()` dialog:
+
+```
+[Major] PidS.DeF.EquipmentPosition:
+┌─────────────────────────────────────┐
+│ The unit is missing (should be °C)  │
+└─────────────────────────────────────┘
+                          [ OK ]  [ Cancel ]
+```
+
+On **OK**, the annotation is:
+1. Added to the in-memory list
+2. Saved to `localStorage` immediately (no delay)
+3. Written to the JSON file on disk
+
+On **Cancel** or empty text, nothing is recorded.
+
+---
+
+### Review display
+
+After connection and on every page reload, reviews appear inline just below each annotated artifact, connected by an **L-shaped bracket** indicating which artifact they belong to:
+
+```
+│
+└─── ┌──────────────────────────────────────────────────────────┐
+     │R│  [MAJOR]  philippe — 2026-03-29 14:32   The unit is missing (should be °C)
+     │E│  [MINOR]  alice — 2026-03-29 15:10    Consider renaming for clarity
+     │V│
+     │I│
+     │E│
+     │W│
+     └──────────────────────────────────────────────────────────┘
+```
+
+Each row shows:
+- A coloured badge: red `MAJOR`, orange `MINOR`, blue `COMMENT`
+- The reviewer's name and timestamp
+- The annotation text
+
+---
+
+### JSON file format
+
+The review file is plain JSON, human-readable and easy to share:
+
+```json
+[
+  {
+    "user": "philippe",
+    "artifact": "PidS.DeF.EquipmentPosition",
+    "context": "Major",
+    "text": "The unit is missing (should be °C)",
+    "date": "2026-03-29 14:32"
+  },
+  {
+    "user": "alice",
+    "artifact": "PidS.DeF.EquipmentPosition",
+    "context": "Minor",
+    "text": "Consider renaming for clarity",
+    "date": "2026-03-29 15:10"
+  },
+  {
+    "user": "bob",
+    "artifact": "PidS.ReQ.PowerConsumption",
+    "context": "Comment",
+    "text": "Verify against the power budget in section 4.2",
+    "date": "2026-03-29 16:05"
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user` | string | Reviewer OS login |
+| `artifact` | string | Full artifact id (`Doc.Type.Object`) |
+| `context` | string | `Major`, `Minor`, or `Comment` |
+| `text` | string | Free-form annotation text |
+| `date` | string | Timestamp `YYYY-MM-DD HH:MM` |
+
+---
+
+### Sharing reviews across a team
+
+The intended workflow for team reviews:
+
+1. One reviewer generates the HTML with `python3 mhtml-cleaner.py input.mhtml -R`
+2. The HTML file and the JSON file are placed in the **same folder** and shared (e.g. via a shared network drive or Git)
+3. Each reviewer opens the HTML in Chrome/Edge and clicks **📂 Open existing file…** to connect the shared JSON
+4. Reviews from all reviewers accumulate in the same JSON file
+5. To consolidate: the last reviewer to save wins — coordinate by not editing simultaneously, or merge JSON arrays manually
+
+> **Tip:** name the JSON file consistently. The default is `<html-basename>_review.json` (e.g. `PIDS_SWM_review.json`), automatically suggested when creating a new file.
+
+---
+
+### Persistence and caching
+
+The system uses two storage layers:
+
+| Layer | Scope | Speed | Survives browser close? |
+|-------|-------|-------|------------------------|
+| `localStorage` | Browser, per document title | Instant | Yes |
+| JSON file on disk | Filesystem | Fast (async write) | Yes, shareable |
+
+On boot:
+1. `localStorage` is read immediately — cached reviews appear without any file dialog
+2. If a file handle was stored in IndexedDB from a previous session, Chrome silently reconnects and reads the JSON file (source of truth), updating the `localStorage` cache
+
+On connect (clicking the banner button):
+- **Existing file selected** → file is read; `localStorage` is overwritten with the file's content
+- **New file created** → `localStorage` content is written into the new file; future adds go to both
 
 ---
 
