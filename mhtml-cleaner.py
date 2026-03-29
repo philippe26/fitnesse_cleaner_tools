@@ -526,236 +526,416 @@ class MHTMLCleaner:
     def _inject_review_system(self, html_content: str) -> str:
         """Injects CSS + JS for a right-click review annotation system.
 
-        Right-clicking any artifact div (with a non-empty artifact-type attribute)
-        opens a context menu with Add Major / Add Minor / Add Comment.
-        Reviews are persisted in localStorage and displayed below each artifact
-        as <div class="review"> blocks.
+        A prominent "CONNECT JSON REVIEW FILE" banner is placed at the very top.
+        The context menu is greyed out until a file is connected.
+
+        Persistence strategy (two layers):
+          - localStorage: fast cache, loaded on every boot for instant display
+          - JSON file on disk (File System Access API): source of truth, written
+            on every add; read on connect (overrides localStorage cache)
+
+        File handle stored in IndexedDB for auto-reconnect across sessions.
+        Default filename: <html-basename>_review.json
+        User name: auto-detected from OS path (/home/user or /Users/user).
+
+        Visual: bent-arrow connector + framed block with vertical REVIEW sidebar.
         """
+        # Banner injected right after <body> opening tag (plain string, not raw)
+        connect_bar = (
+            '<div id="rv-bar">'
+            '<button id="rv-btn" onclick="window._rvConnect()">'
+            '&#128194; CONNECT JSON REVIEW FILE'
+            '</button>'
+            '<span id="rv-label"></span>'
+            '</div>\n'
+        )
+
         css_js = r"""
 <style id="review-system-style">
-/* Context menu */
+/* ── Connect banner ───────────────────────────────── */
+#rv-bar {
+  position: sticky; top: 0; z-index: 10003;
+  display: flex; align-items: center; gap: 12px;
+  padding: 5px 14px;
+  background: #cfd8dc; border-bottom: 1px solid #90a4ae;
+  box-shadow: 0 1px 4px rgba(0,0,0,.15);
+  font-family: sans-serif;
+}
+#rv-btn {
+  padding: 4px 16px; font-size: .88em; font-weight: bold;
+  background: #c62828; color: #fff;
+  border: 1px solid #b71c1c; border-radius: 4px;
+  cursor: pointer; letter-spacing: .4px; transition: background .15s;
+  white-space: nowrap;
+}
+#rv-btn:hover { background: #b71c1c; }
+#rv-btn.connected { background: #2e7d32; border-color: #1b5e20; }
+#rv-btn.connected:hover { background: #1b5e20; }
+#rv-label { color: #455a64; font-size: .82em; }
+
+/* ── Context menu ─────────────────────────────────── */
 #review-context-menu {
-  position: fixed;
-  z-index: 10000;
-  background: #fff;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  box-shadow: 2px 4px 10px rgba(0,0,0,0.2);
-  min-width: 175px;
-  padding: 4px 0;
-  font-size: 0.9em;
-  font-family: sans-serif;
+  position: fixed; z-index: 10002;
+  background: #fff; border: 1px solid #ccc;
+  border-radius: 4px; box-shadow: 2px 4px 10px rgba(0,0,0,.22);
+  min-width: 185px; padding: 4px 0;
+  font-size: .88em; font-family: sans-serif;
 }
-.review-menu-item {
-  padding: 6px 16px;
-  cursor: pointer;
-  white-space: nowrap;
+.review-menu-item { padding: 7px 16px; cursor: pointer; white-space: nowrap; }
+.review-menu-item:hover:not(.review-menu-disabled) { background: #e8f0fe; }
+.review-menu-disabled { color: #bdbdbd; cursor: not-allowed; }
+.review-menu-warn { color: #e65100; font-size: .85em; }
+.review-menu-sep  { border-top: 1px solid #e0e0e0; margin: 4px 0; }
+.review-menu-user { color: #78909c; font-style: italic; font-size: .85em; }
+
+/* ── Review container: L connector + frame ─────────── */
+.review-container {
+  display: flex; align-items: flex-start;
+  margin: 0 0 10px 28px; position: relative;
 }
-.review-menu-item:hover { background: #e8f0fe; }
-.review-menu-sep { border-top: 1px solid #e0e0e0; margin: 4px 0; }
-.review-menu-user { color: #666; font-style: italic; font-size: 0.85em; }
-/* Review blocks */
-div.review { margin: 0 0 6px 0; }
+/* L shape: vertical segment down then turns right — no arrowhead */
+.review-container::before {
+  content: ''; position: absolute;
+  left: -20px; top: -6px;
+  width: 14px; height: calc(50% + 6px);
+  border-left: 3px solid #78909c;
+  border-bottom: 3px solid #78909c;
+  border-bottom-left-radius: 3px;
+}
+/* Framed box */
+.review-frame {
+  display: flex; border: 1px solid #b0bec5; border-radius: 4px;
+  overflow: hidden; width: 100%; background: #f9fafb;
+  box-shadow: 1px 1px 4px rgba(0,0,0,.07);
+}
+/* Vertical "REVIEW" banner */
+.review-sidebar {
+  writing-mode: vertical-lr; transform: rotate(180deg);
+  background: #455a64; color: #fff;
+  font-size: .62em; font-weight: bold; letter-spacing: 3px;
+  text-align: center; padding: 10px 4px;
+  font-family: sans-serif; user-select: none; flex-shrink: 0;
+}
+.review-entries { padding: 4px 8px; flex: 1; min-width: 0; }
+
+/* ── Individual review rows ───────────────────────── */
 .review-entry {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 3px 8px;
-  border-left: 3px solid #ccc;
-  margin: 2px 0;
-  font-size: 0.85em;
-  font-family: sans-serif;
-  background: #fafafa;
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 3px 0; font-size: .83em; font-family: sans-serif;
+  border-bottom: 1px solid #eceff1;
 }
-.review-entry.review-major   { border-left-color: #e53935; background: #fff5f5; }
-.review-entry.review-minor   { border-left-color: #fb8c00; background: #fff8f0; }
-.review-entry.review-comment { border-left-color: #1e88e5; background: #f0f4ff; }
+.review-entry:last-child { border-bottom: none; }
 .review-badge {
-  font-weight: bold;
-  font-size: 0.75em;
-  text-transform: uppercase;
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: #fff;
-  white-space: nowrap;
-  flex-shrink: 0;
+  font-weight: bold; font-size: .7em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 3px; color: #fff;
+  white-space: nowrap; flex-shrink: 0;
 }
-.review-major   .review-badge { background: #e53935; }
-.review-minor   .review-badge { background: #fb8c00; }
-.review-comment .review-badge { background: #1e88e5; }
-.review-meta  { color: #888; font-size: 0.85em; white-space: nowrap; flex-shrink: 0; }
-.review-text  { color: #333; }
+.review-major   .review-badge { background: #c62828; }
+.review-minor   .review-badge { background: #ef6c00; }
+.review-comment .review-badge { background: #1565c0; }
+.review-meta { color: #90a4ae; font-size: .82em; white-space: nowrap; flex-shrink: 0; }
+.review-text { color: #37474f; }
 </style>
 <script id="review-system-script">
 (function() {
-  // localStorage keys — scoped to document title so multiple docs coexist
-  var DOC_KEY   = 'mhtml-reviews:' + (document.title || location.pathname);
-  var USER_KEY  = 'mhtml-review-user';
+  'use strict';
 
-  // ── Persistence ──────────────────────────────────────────────────────────
-  function loadReviews() {
-    try { return JSON.parse(localStorage.getItem(DOC_KEY) || '[]'); }
-    catch(e) { return []; }
-  }
-  function saveReviews(reviews) {
-    localStorage.setItem(DOC_KEY, JSON.stringify(reviews));
-  }
-  function getUser() { return localStorage.getItem(USER_KEY) || ''; }
-  function setUser(u) { localStorage.setItem(USER_KEY, u); }
+  /* ── Config ─────────────────────────────────────────────────────── */
+  var _base = decodeURIComponent(location.pathname).split('/').pop()
+                .replace(/\.html?$/i, '');
+  var SUGGESTED = _base + '_review.json';
+  var IDB_KEY   = 'rv:' + _base;
+  var LS_KEY    = 'rv-data:' + _base;
+  var USER_KEY  = 'rv-user';
 
-  // ── Render review entries below an artifact div ───────────────────────────
-  function renderReviews(artifactId) {
-    var block = document.getElementById('review-block-' + CSS.escape(artifactId));
-    if (!block) return;
-    block.innerHTML = '';
-    loadReviews()
-      .filter(function(r) { return r.artifact === artifactId; })
-      .forEach(function(r) {
-        var entry = document.createElement('div');
-        entry.className = 'review-entry review-' + r.context.toLowerCase();
-        var badge = document.createElement('span');
-        badge.className = 'review-badge';
-        badge.textContent = r.context;
-        var meta = document.createElement('span');
-        meta.className = 'review-meta';
-        meta.textContent = r.user + ' — ' + r.date;
-        var text = document.createElement('span');
-        text.className = 'review-text';
-        text.textContent = r.text;
-        entry.appendChild(badge);
-        entry.appendChild(meta);
-        entry.appendChild(text);
-        block.appendChild(entry);
-      });
-  }
+  /* ── State ──────────────────────────────────────────────────────── */
+  var _handle    = null;   // FileSystemFileHandle
+  var _reviews   = [];     // [{user, artifact, context, text, date}]
+  var _connected = false;
 
-  // ── Insert review blocks after each non-container artifact div ────────────
-  function initReviewBlocks() {
-    document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
-      if (!div.getAttribute('artifact-type')) return;   // skip empty containers
-      var aid = div.getAttribute('artifact');
-      if (!aid) return;
-      var block = document.createElement('div');
-      block.id = 'review-block-' + CSS.escape(aid);
-      block.className = 'review';
-      div.parentNode.insertBefore(block, div.nextSibling);
-      renderReviews(aid);
+  /* ── OS user detection ──────────────────────────────────────────── */
+  function _guessUser() {
+    var p = decodeURIComponent(location.pathname);
+    var m = p.match(/\/home\/([^\/]+)\//);
+    if (m) return m[1];
+    m = p.match(/\/Users\/([^\/]+)\//i);
+    if (m) return m[1];
+    return '';
+  }
+  function getUser() {
+    var u = localStorage.getItem(USER_KEY) || '';
+    if (!u) { u = _guessUser(); if (u) localStorage.setItem(USER_KEY, u); }
+    return u;
+  }
+  function setUser(u) { if (u) localStorage.setItem(USER_KEY, u); }
+
+  /* ── localStorage cache ─────────────────────────────────────────── */
+  function _lsLoad() {
+    try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch(e) { return []; }
+  }
+  function _lsSave() { localStorage.setItem(LS_KEY, JSON.stringify(_reviews)); }
+
+  /* ── IndexedDB — persists file handle across sessions ───────────── */
+  var _db = null;
+  function _idbOpen(cb) {
+    if (_db) return cb(_db);
+    var r = indexedDB.open('mhtml-rv-db', 1);
+    r.onupgradeneeded = function(e) { e.target.result.createObjectStore('h'); };
+    r.onsuccess = function(e) { _db = e.target.result; cb(_db); };
+    r.onerror   = function()  { cb(null); };
+  }
+  function _idbGet(cb) {
+    _idbOpen(function(db) {
+      if (!db) return cb(null);
+      var r = db.transaction('h', 'readonly').objectStore('h').get(IDB_KEY);
+      r.onsuccess = function(e) { cb(e.target.result || null); };
+      r.onerror   = function()  { cb(null); };
+    });
+  }
+  function _idbPut(h) {
+    _idbOpen(function(db) {
+      if (!db) return;
+      try { db.transaction('h', 'readwrite').objectStore('h').put(h, IDB_KEY); } catch(e) {}
     });
   }
 
-  // ── Context menu ──────────────────────────────────────────────────────────
-  var menu = document.createElement('div');
-  menu.id = 'review-context-menu';
-  menu.style.display = 'none';
-  document.body.appendChild(menu);
-
-  function showMenu(x, y, artifactId) {
-    menu.innerHTML = '';
-    ['Major', 'Minor', 'Comment'].forEach(function(ctx) {
-      var item = document.createElement('div');
-      item.className = 'review-menu-item';
-      item.textContent = 'Add ' + ctx;
-      item.addEventListener('mousedown', function(e) { e.stopPropagation(); });
-      item.addEventListener('click', function(e) {
-        e.stopPropagation();
-        hideMenu();
-        addReview(artifactId, ctx);
-      });
-      menu.appendChild(item);
-    });
-    var sep = document.createElement('div');
-    sep.className = 'review-menu-sep';
-    menu.appendChild(sep);
-    var userItem = document.createElement('div');
-    userItem.className = 'review-menu-item review-menu-user';
-    var u = getUser();
-    userItem.textContent = u ? 'Change user (' + u + ')' : 'Set user name…';
-    userItem.addEventListener('mousedown', function(e) { e.stopPropagation(); });
-    userItem.addEventListener('click', function(e) {
-      e.stopPropagation();
-      hideMenu();
-      promptUser(true);
-    });
-    menu.appendChild(userItem);
-
-    menu.style.display = 'block';
-    var mw = menu.offsetWidth, mh = menu.offsetHeight;
-    var vw = window.innerWidth,  vh = window.innerHeight;
-    menu.style.left = (x + mw > vw - 8 ? vw - mw - 8 : x) + 'px';
-    menu.style.top  = (y + mh > vh - 8 ? vh - mh - 8 : y) + 'px';
+  /* ── File I/O ───────────────────────────────────────────────────── */
+  async function _fileSave() {
+    if (!_handle) return;
+    try {
+      var w = await _handle.createWritable();
+      await w.write(JSON.stringify(_reviews, null, 2));
+      await w.close();
+    } catch(e) { console.warn('Review save failed:', e); }
   }
 
-  function hideMenu() { menu.style.display = 'none'; }
-  document.addEventListener('click', hideMenu);
-  document.addEventListener('contextmenu', function(e) {
-    // hide menu if click is outside an artifact div
-    if (!e.target.closest('[artifact-type]')) hideMenu();
-  });
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') hideMenu();
-  });
-
-  // ── User name ─────────────────────────────────────────────────────────────
-  function promptUser(force) {
-    var u = getUser();
-    if (!force && u) return u;
-    var name = window.prompt('Enter your user name (login):', u || '');
-    if (name === null) return u;
-    name = name.trim();
-    if (name) setUser(name);
-    return name || u;
+  async function _fileConnect(h) {
+    try {
+      var perm = await h.queryPermission({mode: 'readwrite'});
+      if (perm !== 'granted') perm = await h.requestPermission({mode: 'readwrite'});
+      if (perm !== 'granted') return false;
+      var f = await h.getFile();
+      if (f.size > 0) {
+        // File already exists — load its content (source of truth), update LS cache
+        _reviews = JSON.parse(await f.text());
+        _lsSave();
+      } else {
+        // New empty file — initialise it from localStorage content
+        _reviews = _lsLoad();
+        await (async function() {
+          var w = await h.createWritable();
+          await w.write(JSON.stringify(_reviews, null, 2));
+          await w.close();
+        })();
+      }
+      _handle = h; _idbPut(h); return true;
+    } catch(e) { return false; }
   }
 
-  // ── Add a review ──────────────────────────────────────────────────────────
-  function addReview(artifactId, context) {
-    var user = promptUser(false);
-    if (!user) {
-      window.alert('Please set your user name first (right-click → Set user name).');
+  /* ── Connect button ─────────────────────────────────────────────── */
+  function _setConnected(yes, fname) {
+    _connected = yes;
+    var btn = document.getElementById('rv-btn');
+    var lbl = document.getElementById('rv-label');
+    if (!btn) return;
+    if (yes) {
+      btn.textContent = '\u{1F4BE} CONNECTED: ' + (fname || 'review file');
+      btn.classList.add('connected');
+      if (lbl) { lbl.textContent = getUser() + ' \u2014 right-click any artifact to add a review'; }
+    } else {
+      btn.textContent = '\u{1F4C2} CONNECT JSON REVIEW FILE';
+      btn.classList.remove('connected');
+      if (lbl) { lbl.textContent = 'Reviews disabled \u2014 connect a file to enable editing'; }
+    }
+  }
+
+  window._rvConnect = async function() {
+    if (!window.showSaveFilePicker) {
+      alert('File System Access API not available.\nUse Chrome or Edge (v86+) for file persistence.');
       return;
     }
-    var text = window.prompt('[' + context + '] ' + artifactId, '');
-    if (text === null) return;
-    text = text.trim();
-    if (!text) return;
+    try {
+      var h = await window.showSaveFilePicker({
+        suggestedName: SUGGESTED,
+        types: [{ description: 'Review JSON', accept: {'application/json': ['.json']} }]
+      });
+      var ok = await _fileConnect(h);
+      if (ok) { _setConnected(true, h.name); _renderAll(); }
+    } catch(e) { /* user cancelled */ }
+  };
 
-    var now = new Date();
-    var pad = function(n) { return String(n).padStart(2, '0'); };
-    var dateStr = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
-                + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
-
-    var reviews = loadReviews();
-    reviews.push({ user: user, artifact: artifactId, context: context, text: text, date: dateStr });
-    saveReviews(reviews);
-    renderReviews(artifactId);
+  /* ── Render ─────────────────────────────────────────────────────── */
+  function _render(aid) {
+    var wrap = document.getElementById('rv-' + aid);
+    if (!wrap) return;
+    var mine = _reviews.filter(function(r) { return r.artifact === aid; });
+    if (!mine.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'flex';
+    var en = wrap.querySelector('.review-entries');
+    en.innerHTML = '';
+    mine.forEach(function(r) {
+      var row = document.createElement('div');
+      row.className = 'review-entry review-' + r.context.toLowerCase();
+      var bd = document.createElement('span'); bd.className = 'review-badge'; bd.textContent = r.context;
+      var mt = document.createElement('span'); mt.className = 'review-meta';
+      mt.textContent = r.user + ' \u2014 ' + r.date;
+      var tx = document.createElement('span'); tx.className = 'review-text'; tx.textContent = r.text;
+      row.appendChild(bd); row.appendChild(mt); row.appendChild(tx);
+      en.appendChild(row);
+    });
+  }
+  function _renderAll() {
+    document.querySelectorAll('[artifact-type][artifact]').forEach(function(d) {
+      var a = d.getAttribute('artifact'); if (a) _render(a);
+    });
   }
 
-  // ── Attach right-click listeners ──────────────────────────────────────────
-  function attachContextMenus() {
+  /* ── Review blocks (created once on boot) ───────────────────────── */
+  function _initBlocks() {
     document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
       if (!div.getAttribute('artifact-type')) return;
-      var aid = div.getAttribute('artifact');
-      if (!aid) return;
+      var aid = div.getAttribute('artifact'); if (!aid) return;
+      var wrap = document.createElement('div');
+      wrap.id = 'rv-' + aid;
+      wrap.className = 'review-container';
+      wrap.style.display = 'none';
+      var frame = document.createElement('div'); frame.className = 'review-frame';
+      frame.innerHTML =
+        '<div class="review-sidebar">REVIEW</div>' +
+        '<div class="review-entries"></div>';
+      wrap.appendChild(frame);
+      div.parentNode.insertBefore(wrap, div.nextSibling);
+    });
+  }
+
+  /* ── Context menu ───────────────────────────────────────────────── */
+  var _menu = null;
+  function _mkMenu() {
+    _menu = document.createElement('div');
+    _menu.id = 'review-context-menu';
+    _menu.style.display = 'none';
+    document.body.appendChild(_menu);
+    document.addEventListener('click', function(e) {
+      if (_menu && !_menu.contains(e.target)) _menu.style.display = 'none';
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _menu) _menu.style.display = 'none';
+    });
+  }
+
+  function _showMenu(x, y, aid) {
+    _menu.innerHTML = '';
+    [['🔴', 'Major'], ['🟠', 'Minor'], ['🔵', 'Comment']].forEach(function(p) {
+      var it = document.createElement('div');
+      if (_connected) {
+        it.className = 'review-menu-item';
+        it.addEventListener('click', function(e) {
+          e.stopPropagation(); _menu.style.display = 'none'; _add(aid, p[1]);
+        });
+      } else {
+        it.className = 'review-menu-item review-menu-disabled';
+      }
+      it.textContent = p[0] + '\u00a0Add ' + p[1];
+      _menu.appendChild(it);
+    });
+
+    var sep = document.createElement('div'); sep.className = 'review-menu-sep';
+    _menu.appendChild(sep);
+
+    if (!_connected) {
+      var warn = document.createElement('div');
+      warn.className = 'review-menu-item review-menu-warn';
+      warn.textContent = '\u26a0\ufe0f\u00a0Connect a file first\u2026';
+      warn.addEventListener('click', function(e) {
+        e.stopPropagation(); _menu.style.display = 'none'; window._rvConnect();
+      });
+      _menu.appendChild(warn);
+      var sep2 = document.createElement('div'); sep2.className = 'review-menu-sep';
+      _menu.appendChild(sep2);
+    }
+
+    var ui = document.createElement('div');
+    ui.className = 'review-menu-item review-menu-user';
+    var u = getUser();
+    ui.textContent = u ? '\u{1f464}\u00a0' + u + ' (change\u2026)' : '\u{1f464}\u00a0Set user name\u2026';
+    ui.addEventListener('click', function(e) {
+      e.stopPropagation(); _menu.style.display = 'none';
+      var n = window.prompt('User name:', u || '');
+      if (n !== null && n.trim()) { setUser(n.trim()); _setConnected(_connected, _handle && _handle.name); }
+    });
+    _menu.appendChild(ui);
+
+    _menu.style.display = 'block';
+    var mw = _menu.offsetWidth, mh = _menu.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    _menu.style.left = (x + mw > vw - 8 ? vw - mw - 8 : x) + 'px';
+    _menu.style.top  = (y + mh > vh - 8 ? vh - mh - 8 : y) + 'px';
+  }
+
+  /* ── Add review ─────────────────────────────────────────────────── */
+  async function _add(aid, ctx) {
+    var u = getUser();
+    if (!u) {
+      u = window.prompt('Enter your user name:', '');
+      if (!u || !u.trim()) return;
+      setUser(u = u.trim());
+    }
+    var txt = window.prompt('[' + ctx + '] ' + aid + ':', '');
+    if (txt === null || !txt.trim()) return;
+    var now = new Date();
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    var d = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
+          + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+    _reviews.push({ user: u, artifact: aid, context: ctx, text: txt.trim(), date: d });
+    _lsSave();          // fast local cache
+    await _fileSave();  // persist to disk
+    _render(aid);
+  }
+
+  /* ── Attach context menus ───────────────────────────────────────── */
+  function _attach() {
+    document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
+      if (!div.getAttribute('artifact-type')) return;
+      var aid = div.getAttribute('artifact'); if (!aid) return;
       div.addEventListener('contextmenu', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        showMenu(e.clientX, e.clientY, aid);
+        e.preventDefault(); e.stopPropagation();
+        _showMenu(e.clientX, e.clientY, aid);
       });
     });
   }
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-      initReviewBlocks();
-      attachContextMenus();
+  /* ── Bootstrap ──────────────────────────────────────────────────── */
+  async function _boot() {
+    _mkMenu(); _initBlocks(); _attach();
+    // Fast path: show cached reviews immediately from localStorage
+    _reviews = _lsLoad();
+    if (_reviews.length) _renderAll();
+    _setConnected(false);
+    // Try auto-reconnect via stored IndexedDB handle
+    _idbGet(async function(h) {
+      if (!h) return;
+      var ok = await _fileConnect(h);   // reads file, overwrites LS cache
+      if (ok) { _setConnected(true, h.name); _renderAll(); }
     });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _boot);
   } else {
-    initReviewBlocks();
-    attachContextMenus();
+    _boot();
   }
 })();
 </script>
 """
+        # Inject connect banner right after <body> opening tag
+        body_m = re.search(r'<body[^>]*>', html_content, re.IGNORECASE)
+        if body_m:
+            pos = body_m.end()
+            html_content = html_content[:pos] + '\n' + connect_bar + html_content[pos:]
+        else:
+            html_content = connect_bar + html_content
+
+        # Inject CSS + JS before </body>
         if '</body>' in html_content:
             html_content = html_content.replace('</body>', css_js + '\n</body>', 1)
         else:
