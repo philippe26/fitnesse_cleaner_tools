@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner - Converts MHTML files to standalone HTML
+MHTML Cleaner v2.3 - Converts MHTML files to standalone HTML
 """
 
 import re
@@ -119,17 +119,14 @@ class MHTMLCleaner:
 
         path = url[len(prefix):]
 
+        # Any localhost URL with a fragment → use it as local anchor
+        # handles: Page#7, Page?query#7, OtherPage?flatPage#7
+        frag = re.search(r'#(.+)$', path)
+        if frag:
+            return f"#{frag.group(1)}"
+
+        # localhost URL pointing to main page without fragment → neutral anchor
         if self.main_page in path:
-            match = re.search(rf'{self.main_page}([^/&]*)', path)
-            if match:
-                anchor = match.group(1)
-                if anchor.startswith('?'):
-                    anchor_num = anchor[1:]
-                    return f"#{anchor_num}" if anchor_num else "#"
-                elif anchor.startswith('#'):
-                    return anchor
-                else:
-                    return '#'
             return '#'
 
         return None
@@ -326,8 +323,12 @@ class MHTMLCleaner:
 
             if self._should_remove_link(url_normalized):
                 return ''
-            else:
-                return f'{prefix}#{suffix}'
+
+            anchor = self._normalize_localhost_link(url_normalized)
+            if anchor:
+                return f'{prefix}{anchor}{suffix}'
+
+            return f'{prefix}#{suffix}'
 
         return re.sub(pattern, replacer, html_content, flags=re.IGNORECASE)
 

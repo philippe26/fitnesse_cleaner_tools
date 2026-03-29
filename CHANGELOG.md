@@ -2,6 +2,22 @@
 
 ---
 
+## v2.3 — 2026-03-29
+
+### Fix: anchor links broken on cross-page references
+`_normalize_localhost_link` only extracted fragments when the URL contained `main_page`. Links to other pages (e.g. `PidS.DocumentView?flatPage#2`) fell through to the fallback and lost their fragment, resulting in `#` instead of `#2`.
+
+New logic: any localhost URL containing a `#fragment` is converted to that anchor directly, regardless of which page it points to. The `main_page` check is now only used for fragment-less links.
+
+| URL | Before | After |
+|-----|--------|-------|
+| `Page?flatPage#2` | `#` | `#2` ✅ |
+| `Page#7` | `#7` | `#7` ✅ |
+| `OtherPage?query#5` | `#` | `#5` ✅ |
+| `Page?edit` | `#` | `#` ✅ |
+
+---
+
 ## v2.2.5 — 2026-03-29
 
 ### Changes
