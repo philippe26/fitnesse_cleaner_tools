@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.2.3 FINAL - Production Ready
+MHTML Cleaner v2.2.4 FINAL - Production Ready
 ✅ #1: Base64 sans sauts de ligne (et sans backslashes!)
 ✅ #2: URL CSS sans chemin relatif
 ✅ #3: Ancres numérotées conservées
 ✅ #4: Option --remove-sidenav
 ✅ #5: Détection dynamique du port
 ✅ #6: Suppression des boutons FitNesse CORRIGÉE
+✅ #7: Décodage quoted-printable COMPLET avec quopri
 """
 
 import re
 import argparse
 import sys
+import quopri
 from pathlib import Path
 from typing import Tuple
 
@@ -24,9 +26,9 @@ class MHTMLCleaner:
         r'/GaeL\.', r'/FitNesse\.', r'/RecentChanges',
     ]
     
-    def __init__(self, input_file: str, output_file: str, level: str = 'moderate', 
+    def __init__(self, input_file: str, output_file: str, level: str = 'moderate',
                  preserve_fitnesse: bool = False, preserve_css: bool = False,
-                 verbose: bool = False, output_format: str = 'html',
+                 verbose: bool = False,
                  remove_buttons: bool = False, remove_sidenav: bool = False):
         self.input_file = input_file
         self.output_file = output_file
@@ -34,7 +36,6 @@ class MHTMLCleaner:
         self.preserve_fitnesse = preserve_fitnesse
         self.preserve_css = preserve_css
         self.verbose = verbose
-        self.output_format = output_format.lower()
         self.remove_buttons = remove_buttons
         self.remove_sidenav = remove_sidenav
         
@@ -174,8 +175,29 @@ class MHTMLCleaner:
         
         pattern = r' action=(["\'])([^"\']*?)\1'
         return re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
-    
     def _decode_quoted_printable_section(self, content: str) -> str:
+        """✅ NOUVEAU: Décode quoted-printable COMPLETEMENT avec quopri"""
+        try:
+            # D'abord, enlever les sauts de ligne soft (=\n ou =\r\n)
+            content = re.sub(r'=\r?\n', '', content)
+            
+            # Utiliser quopri pour décoder TOUS les =XX (pas juste une liste statique)
+            # quopri travaille sur bytes, donc encoder puis décoder
+            decoded = quopri.decodestring(content.encode()).decode('utf-8')
+            return decoded
+        except UnicodeDecodeError:
+            # Si UTF-8 échoue, essayer latin-1
+            try:
+                content = re.sub(r'=\r?\n', '', content)
+                decoded = quopri.decodestring(content.encode()).decode('latin-1')
+                return decoded
+            except:
+                # Fallback: retourner le contenu non décodé
+                if self.verbose:
+                    print("  ⚠️  Erreur décodage quoted-printable")
+                return content
+            
+    def _decode_quoted_printable_section_basic(self, content: str) -> str:
         """Décode quoted-printable"""
         lines = content.split('\n')
         decoded = []
@@ -371,7 +393,6 @@ class MHTMLCleaner:
                 print(f"📖 Lecture: {self.input_file}")
                 print(f"🔌 Port: {self.port}")
                 print(f"📄 Page: {self.main_page}")
-                print(f"📝 Format: {self.output_format.upper()}")
                 if self.remove_buttons:
                     print(f"🗑️  Boutons: OUI")
                 if self.remove_sidenav:
@@ -381,7 +402,7 @@ class MHTMLCleaner:
             with open(self.input_file, 'r', encoding='utf-8') as f:
                 full_content = f.read()
             
-            html_section, html_start, html_end = self._extract_html_section(full_content)
+            html_section, _, _ = self._extract_html_section(full_content)
             
             if self.verbose:
                 print("🧹 Nettoyage...")
@@ -398,21 +419,16 @@ class MHTMLCleaner:
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
             
-            if self.output_format == 'html':
-                if self.verbose:
-                    print("  🔄 MHTML → HTML pur")
-                
-                html_cleaned = re.sub(
-                    r'<link[^>]*href=["\']cid:[^"\']+["\'][^>]*>',
-                    '', html_cleaned, flags=re.IGNORECASE
-                )
-                
-                with open(self.output_file, 'w', encoding='utf-8') as f:
-                    f.write(html_cleaned)
-            else:
-                cleaned_content = full_content[:html_start] + html_cleaned + full_content[html_end:]
-                with open(self.output_file, 'w', encoding='utf-8') as f:
-                    f.write(cleaned_content)
+            if self.verbose:
+                print("  🔄 MHTML → HTML")
+
+            html_cleaned = re.sub(
+                r'<link[^>]*href=["\']cid:[^"\']+["\'][^>]*>',
+                '', html_cleaned, flags=re.IGNORECASE
+            )
+
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                f.write(html_cleaned)
             
             if self.verbose:
                 print(f"\n✅ Fichier: {self.output_file}")
@@ -425,24 +441,32 @@ class MHTMLCleaner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='MHTML Cleaner v2.2.3 - Convertit MHTML en HTML')
-    
-    parser.add_argument('input_file', help='Fichier MHTML')
-    parser.add_argument('-o', '--output', dest='output_file', required=True, help='Fichier de sortie')
+    parser = argparse.ArgumentParser(description='MHTML Cleaner - Converts MHTML to HTML')
+
+    parser.add_argument('input_file', help='Input MHTML file')
+    parser.add_argument('-o', '--output', dest='output_file', default=None, help='Output file (default: input name with .html extension)')
     parser.add_argument('-l', '--level', choices=['light', 'moderate', 'strict'], default='moderate')
     parser.add_argument('-p', '--preserve-fitnesse', action='store_true')
     parser.add_argument('-c', '--preserve-css', action='store_true')
-    parser.add_argument('-f', '--format', choices=['html', 'mhtml'], default='html')
-    parser.add_argument('-b', '--remove-buttons', action='store_true', help='Supprimer boutons FitNesse')
-    parser.add_argument('-s', '--remove-sidenav', action='store_true', help='Supprimer <div class="sidenav">')
+    parser.add_argument('-b', '--remove-buttons', action='store_true', help='Remove editing buttons')
+    parser.add_argument('-s', '--remove-sidenav', action='store_true', help='Remove sidenav panel')
+    parser.add_argument('-A', '--remove-all', action='store_true', help='Preset: enable -b, -s, -v')
     parser.add_argument('-v', '--verbose', action='store_true')
-    
+
     args = parser.parse_args()
-    
+
     if not Path(args.input_file).exists():
         print(f"❌ Fichier non trouvé: {args.input_file}", file=sys.stderr)
         sys.exit(1)
-    
+
+    if args.remove_all:
+        args.remove_buttons = True
+        args.remove_sidenav = True
+        args.verbose = True
+
+    if args.output_file is None:
+        args.output_file = str(Path(args.input_file).with_suffix('.html'))
+
     cleaner = MHTMLCleaner(
         input_file=args.input_file,
         output_file=args.output_file,
@@ -450,7 +474,6 @@ def main():
         preserve_fitnesse=args.preserve_fitnesse,
         preserve_css=args.preserve_css,
         verbose=args.verbose,
-        output_format=args.format,
         remove_buttons=args.remove_buttons,
         remove_sidenav=args.remove_sidenav
     )
