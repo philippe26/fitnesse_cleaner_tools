@@ -39,6 +39,9 @@ python3 mhtml-cleaner.py input.mhtml [options]
 | `--remove-sidenav` | `-s` | off | Remove the side navigation panel |
 | `--remove-all` | `-A` | off | Preset: enables `-b`, `-s`, `-v` |
 | `--verbose` | `-v` | off | Print details of each transformation |
+| `--validate` | `-V` | off | Run HTML validator on output after cleaning |
+| `--database-file <file>` | | off | Export artifact database to a CSV file |
+| `--version` | | | Show version number and exit |
 | `--help` | `-h` | | Show help |
 
 ---
@@ -51,7 +54,7 @@ Replaces only links pointing to the main page with local anchors.
 
 ```html
 <!-- Before -->
-<a href="http://localhost:50020/MyDocument#section1">Section 1</a>
+<a href="http://localhost:<port>/MyDocument#section1">Section 1</a>
 
 <!-- After -->
 <a href="#section1">Section 1</a>
@@ -94,6 +97,52 @@ python3 mhtml-cleaner.py input.mhtml -b -s --level strict
 ### Keep original links (even broken ones)
 ```bash
 python3 mhtml-cleaner.py input.mhtml --preserve-fitnesse
+```
+
+---
+
+## URL resolution logic
+
+All localhost URLs follow the pattern:
+
+```
+http://localhost:<port>/<doc_prefix>.<doc_name>[?options][#fragment]
+```
+
+After quoted-printable decoding, the script applies these decision rules to every `href` and `src` attribute:
+
+### Rule 1 — System resource → removed
+URLs pointing to FitNesse system resources (`/files/fitnesse/`, `/FrontPage`, `/RecentChanges`, etc.) are stripped entirely.
+
+### Rule 2 — Fragment present → local anchor
+Any URL containing `#fragment` is converted to that anchor, regardless of the page it points to.
+
+```
+href="http://localhost:50020/Doc.DocName?flatPage#7"  →  href="#7"
+href="http://localhost:50020/Doc.DocName#42"          →  href="#42"
+```
+
+### Rule 3 — Doc-level URL (2 dot-parts) → neutral anchor
+URLs with exactly 2 dot-separated path parts (`Doc.DocName`) with no fragment become `#`.
+
+```
+href="http://localhost:50020/Doc.DocName?edit"  →  href="#"
+```
+
+### Rule 4 — Artifact URL (3+ dot-parts) → named anchor + database entry
+URLs with 3 or more dot-separated parts (`Doc.Type.ObjectId`) point to a specific artifact. The query string is stripped and the path becomes the anchor. The object is also recorded in the artifact database.
+
+```
+href="http://localhost:50020/PidS.DeF.EquipmentPosition"            →  href="#PidS.DeF.EquipmentPosition"
+href="http://localhost:50020/PidS.DeF.EquipmentPosition?attributes" →  href="#PidS.DeF.EquipmentPosition"
+```
+
+### Special case — Image src
+`src` attributes matching the pattern `?file&name=<img_name>` are **not rewritten**. They are left intact for the base64 injection step, which extracts the corresponding multipart section and replaces the URL with a `data:image/...;base64,...` inline value.
+
+```
+src="http://localhost:50020/PidS.DeF.FrameFamous?file&name=frame.png"
+  →  src="data:image/png;base64,..."
 ```
 
 ---

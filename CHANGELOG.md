@@ -2,6 +2,29 @@
 
 ---
 
+## v2.4 — 2026-03-29
+
+### Fix: artifact database — regex and doc prefix filter
+- Object id (`ZZ`) now supports multiple dot-separated camelCase parts: `FrameEth` and `MibCont.TreeMain.FeLin` are both valid
+- Only artifacts whose doc prefix matches the current document are indexed (e.g. `PidS.*` only, excluding cross-document references like `Etso2c153.*`)
+- CSV export: `object` column now contains the full id including sub-parts (`MibCont.TreeMain.FeLin`)
+
+### Fix: URL resolution rewrite (`_resolve_href`)
+- Unified decision logic for all localhost href/src attributes
+- `src` image URLs (`?file&name=…`) are preserved for base64 injection and never rewritten
+- 3-part+ artifact paths (`Doc.Type.Object`) correctly resolve to `#Doc.Type.Object`
+
+### New: `--validate` / `-V`
+Runs `test-html-validator.py` automatically on the output file after cleaning.
+
+### New: `--database-file <file>`
+Exports the artifact database to a CSV file with columns: `id`, `document`, `type`, `object`, `description`.
+
+### New: `--version`
+Both `mhtml-cleaner.py` and `test-html-validator.py` now support `--version`.
+
+---
+
 ## v2.3 — 2026-03-29
 
 ### Fix: anchor links broken on cross-page references

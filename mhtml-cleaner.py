@@ -1,14 +1,30 @@
 #!/usr/bin/env python3
 """
-MHTML Cleaner v2.3 - Converts MHTML files to standalone HTML
+MHTML Cleaner v2.4 - Converts MHTML files to standalone HTML
 """
 
+__version__ = '2.4'
+
 import re
+import csv
 import argparse
 import sys
 import quopri
 from pathlib import Path
 from typing import Tuple
+
+# Optional: import validator if available in the same directory
+try:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        'html_validator',
+        Path(__file__).parent / 'test-html-validator.py'
+    )
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    HTMLValidator = _mod.HTMLValidator
+except Exception:
+    HTMLValidator = None
 
 
 class MHTMLCleaner:
@@ -22,7 +38,8 @@ class MHTMLCleaner:
     def __init__(self, input_file: str, output_file: str, level: str = 'moderate',
                  preserve_fitnesse: bool = False,
                  verbose: bool = False,
-                 remove_buttons: bool = False, remove_sidenav: bool = False):
+                 remove_buttons: bool = False, remove_sidenav: bool = False,
+                 database_file: str = None):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -30,6 +47,7 @@ class MHTMLCleaner:
         self.verbose = verbose
         self.remove_buttons = remove_buttons
         self.remove_sidenav = remove_sidenav
+        self.database_file = database_file
 
         self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
@@ -111,56 +129,100 @@ class MHTMLCleaner:
                 return True
         return False
 
-    def _normalize_localhost_link(self, url: str) -> str:
-        """Converts a localhost URL to a local anchor or returns None if not applicable"""
+    def _resolve_href(self, url: str) -> str:
+        """Resolves a localhost href URL to a local anchor.
+
+        Decision rules (applied on decoded URL, after &amp; → &):
+          1. System resource (FitNesse CSS/JS, FrontPage…) → return '' (remove)
+          2. URL contains #fragment → return '#fragment'
+          3. Path has 2 dot-separated parts (doc-level, e.g. Doc.DocName) → return '#'
+          4. Path has 3+ dot-separated parts (artifact, e.g. Doc.Type.Object) → return '#Doc.Type.Object'
+             Query params (?attributes, ?responder=…) are stripped.
+          5. Anything else → return '#'
+        """
+        url = url.replace('&amp;', '&')
         prefix = f'http://localhost:{self.port}/'
         if not url.startswith(prefix):
             return None
 
+        if self._should_remove_link(url):
+            return ''
+
         path = url[len(prefix):]
 
-        # Any localhost URL with a fragment → use it as local anchor
-        # handles: Page#7, Page?query#7, OtherPage?flatPage#7
-        frag = re.search(r'#(.+)$', path)
-        if frag:
-            return f"#{frag.group(1)}"
+        # Rule 2: fragment present → use it as local anchor
+        if '#' in path:
+            frag = path.split('#', 1)[1]
+            return f'#{frag}' if frag else '#'
 
-        # localhost URL pointing to main page without fragment → neutral anchor
-        if self.main_page in path:
+        # Strip query string to classify path
+        clean_path = path.split('?')[0]
+        parts = clean_path.split('.')
+
+        # Rule 3: 2 parts = doc-level URL (Doc.DocName) → neutral anchor
+        if len(parts) == 2:
             return '#'
 
-        return None
+        # Rule 4: 3+ parts = artifact (Doc.Type.ObjectId[.sub…]) → local anchor
+        if len(parts) >= 3:
+            return f'#{clean_path}'
+
+        return '#'
+
+    def _is_image_url(self, url: str) -> bool:
+        """Returns True if the URL is an image resource (src should not be rewritten)."""
+        url = url.replace('&amp;', '&')
+        return bool(re.search(r'[?&](?:file|name)=', url, re.IGNORECASE))
 
     def _process_html_attributes(self, html_content: str) -> str:
-        """Replaces localhost URLs in href and src attributes"""
-        def replace_action(m):
-            prefix = m.group(1)
-            url = m.group(2)
-            suffix = m.group(3)
+        """Rewrites localhost URLs in href and src attributes.
 
-            if self._should_remove_link(url):
+        - href: fully resolved via _resolve_href
+        - src:  left unchanged if it is an image URL (handled later by base64 injection);
+                otherwise resolved via _resolve_href
+        """
+        def replace_href(m):
+            attr, url, quote = m.group(1), m.group(2), m.group(3)
+            result = self._resolve_href(url)
+            if result is None:
+                return m.group(0)
+            if result == '':
                 return ''
+            return f'{attr}{result}{quote}'
 
-            normalized = self._normalize_localhost_link(url)
-            if normalized:
-                return f'{prefix}{normalized}{suffix}'
+        def replace_src(m):
+            attr, url, quote = m.group(1), m.group(2), m.group(3)
+            if not url.startswith(f'http://localhost:{self.port}/'):
+                return m.group(0)
+            if self._is_image_url(url):
+                return m.group(0)   # leave for base64 injection
+            result = self._resolve_href(url)
+            if result is None:
+                return m.group(0)
+            if result == '':
+                return ''
+            return f'{attr}{result}{quote}'
 
-            return m.group(0)
-
-        pattern = r'((?:href|src)\s*=\s*["\'])([^"\']*?)(["\'])'
-        return re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
+        html_content = re.sub(
+            r'(href\s*=\s*["\'])([^"\']*?)(["\'])',
+            replace_href, html_content, flags=re.IGNORECASE
+        )
+        html_content = re.sub(
+            r'(src\s*=\s*["\'])([^"\']*?)(["\'])',
+            replace_src, html_content, flags=re.IGNORECASE
+        )
+        return html_content
 
     def _process_form_actions(self, html_content: str) -> str:
         """Replaces localhost URLs in form action attributes"""
         def replace_action(m):
-            action = m.group(1)
-            if self._should_remove_link(action):
+            url = m.group(2)
+            result = self._resolve_href(url)
+            if result is None:
+                return m.group(0)
+            if result == '':
                 return ''
-
-            normalized = self._normalize_localhost_link(action)
-            if normalized:
-                return f' action="{normalized}"'
-            return m.group(0)
+            return f' action="{result}"'
 
         pattern = r' action=(["\'])([^"\']*?)\1'
         return re.sub(pattern, replace_action, html_content, flags=re.IGNORECASE)
@@ -319,16 +381,10 @@ class MHTMLCleaner:
             url = m.group(2)
             suffix = m.group(3)
 
-            url_normalized = url.replace('&amp;', '&')
-
-            if self._should_remove_link(url_normalized):
+            result = self._resolve_href(url)
+            if result is None or result == '':
                 return ''
-
-            anchor = self._normalize_localhost_link(url_normalized)
-            if anchor:
-                return f'{prefix}{anchor}{suffix}'
-
-            return f'{prefix}#{suffix}'
+            return f'{prefix}{result}{suffix}'
 
         return re.sub(pattern, replacer, html_content, flags=re.IGNORECASE)
 
@@ -380,6 +436,86 @@ class MHTMLCleaner:
 
         return html_content
 
+    def _build_artifact_database(self, html_content: str) -> dict:
+        """Builds a database of artifact divs: {full_id: tooltip_text}
+
+        Matches <div id="X.Y.ZZ"> where:
+          - X  = doc prefix (must equal the doc prefix of main_page, e.g. "PidS")
+          - Y  = object type, single camelCase word
+          - ZZ = object id, one or more dot-separated camelCase words
+                 e.g. "FrameEth" or "MibCont.TreeMain.FeLin"
+
+        Extracts the short description from the nearest <b>...</b> after the div.
+        """
+        db = {}
+
+        # Derive doc prefix from main_page (e.g. "PidS.DocumentView" → "PidS")
+        doc_prefix = self.main_page.split('.')[0] if '.' in self.main_page else self.main_page
+
+        # Pattern: X.Y.ZZ where X == doc_prefix, Y is one camelCase word,
+        # ZZ is one or more dot-separated camelCase words (no digits, no spaces)
+        pattern = rf'<div[^>]+id="({re.escape(doc_prefix)}\.[A-Za-z]+\.[A-Za-z]+(?:\.[A-Za-z]+)*)"'
+
+        for m in re.finditer(pattern, html_content):
+            full_id = m.group(1)
+
+            # Extract tooltip from the nearest <b>...</b> in the following ~800 chars
+            snippet = html_content[m.start():m.start() + 800]
+            tooltip = ''
+            title_m = re.search(r'<b>([^<]+)</b>', snippet)
+            if title_m:
+                tooltip = title_m.group(1).strip()
+
+            db[full_id] = tooltip
+
+        if self.verbose:
+            print(f"  📚 Artifact database: {len(db)} entries (prefix: {doc_prefix})")
+
+        return db
+
+    def _export_database_csv(self, db: dict):
+        """Exports the artifact database to a CSV file (id, type, object, description)"""
+        with open(self.database_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['id', 'document', 'type', 'object', 'description'])
+            for full_id, tooltip in sorted(db.items()):
+                parts = full_id.split('.')
+                doc   = parts[0]
+                type_ = parts[1] if len(parts) > 1 else ''
+                obj   = '.'.join(parts[2:]) if len(parts) > 2 else ''
+                writer.writerow([full_id, doc, type_, obj, tooltip])
+        if self.verbose:
+            print(f"  💾 Database exported: {self.database_file} ({len(db)} entries)")
+
+    def _add_artifact_tooltips(self, html_content: str, db: dict) -> dict:
+        """Adds title= tooltip attributes to <a href="#Doc.Type.Object"> links
+        using the description extracted from the database.
+        """
+        if not db:
+            return html_content
+
+        def add_title(m):
+            full_tag = m.group(0)
+            href_val = m.group(1)          # e.g. #PidS.DeF.EquipmentPosition
+            artifact_id = href_val[1:]     # strip leading #
+
+            if artifact_id not in db:
+                return full_tag
+
+            tooltip = db[artifact_id]
+            if not tooltip:
+                return full_tag
+
+            # Avoid adding duplicate title attribute
+            if 'title=' in full_tag:
+                return full_tag
+
+            # Insert title= just before the closing >
+            return full_tag.replace('<a ', f'<a title="{tooltip}" ', 1)
+
+        pattern = r'<a\s[^>]*href="(#[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+)"[^>]*>'
+        return re.sub(pattern, add_title, html_content, flags=re.IGNORECASE)
+
     def clean(self) -> bool:
         """Runs the full cleaning pipeline"""
         try:
@@ -410,6 +546,10 @@ class MHTMLCleaner:
             html_cleaned = self._extract_and_inject_css(full_content, html_cleaned)
             html_cleaned = self._extract_and_inject_images(full_content, html_cleaned)
             html_cleaned = self._replace_remaining_localhost_links(html_cleaned)
+            artifact_db = self._build_artifact_database(html_cleaned)
+            if self.database_file:
+                self._export_database_csv(artifact_db)
+            html_cleaned = self._add_artifact_tooltips(html_cleaned, artifact_db)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
 
@@ -447,6 +587,11 @@ def main():
     parser.add_argument('-s', '--remove-sidenav', action='store_true', help='Remove sidenav panel')
     parser.add_argument('-A', '--remove-all', action='store_true', help='Preset: enable -b, -s, -v')
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('--version', action='version', version=f'mhtml-cleaner {__version__}')
+    parser.add_argument('-V', '--validate', action='store_true',
+                        help='Run HTML validator on output file after cleaning')
+    parser.add_argument('--database-file', default=None,
+                        help='Export artifact database to a CSV file')
 
     args = parser.parse_args()
 
@@ -469,10 +614,23 @@ def main():
         preserve_fitnesse=args.preserve_fitnesse,
         verbose=args.verbose,
         remove_buttons=args.remove_buttons,
-        remove_sidenav=args.remove_sidenav
+        remove_sidenav=args.remove_sidenav,
+        database_file=(
+            str(Path(args.database_file).with_suffix('.csv'))
+            if args.database_file and not args.database_file.endswith('.csv')
+            else args.database_file
+        )
     )
 
     success = cleaner.clean()
+
+    if success and args.validate:
+        if HTMLValidator is None:
+            print("⚠️  test-html-validator.py not found — skipping validation", file=sys.stderr)
+        else:
+            validator = HTMLValidator(args.output_file, verbose=True)
+            success = validator.validate()
+
     sys.exit(0 if success else 1)
 
 
