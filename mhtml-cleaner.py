@@ -3,7 +3,7 @@
 MHTML Cleaner v2.4 - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.4'
+__version__ = '2.5'
 
 import re
 import csv
@@ -39,7 +39,8 @@ class MHTMLCleaner:
                  preserve_fitnesse: bool = False,
                  verbose: bool = False,
                  remove_buttons: bool = False, remove_sidenav: bool = False,
-                 database_file: str = None):
+                 database_file: str = None,
+                 include_hovering: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -48,6 +49,7 @@ class MHTMLCleaner:
         self.remove_buttons = remove_buttons
         self.remove_sidenav = remove_sidenav
         self.database_file = database_file
+        self.include_hovering = include_hovering
 
         self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
@@ -502,19 +504,112 @@ class MHTMLCleaner:
             if artifact_id not in db:
                 return full_tag
 
+            # When hovering is active, the JS tooltip replaces the native title —
+            # skip adding title= to avoid showing both
+            if self.include_hovering:
+                return full_tag
+
             tooltip = db[artifact_id]
             if not tooltip:
                 return full_tag
 
-            # Avoid adding duplicate title attribute
             if 'title=' in full_tag:
                 return full_tag
 
-            # Insert title= just before the closing >
             return full_tag.replace('<a ', f'<a title="{tooltip}" ', 1)
 
         pattern = r'<a\s[^>]*href="(#[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+)"[^>]*>'
         return re.sub(pattern, add_title, html_content, flags=re.IGNORECASE)
+
+    def _inject_hovering(self, html_content: str) -> str:
+        """Injects CSS + JS for artifact hover tooltips.
+
+        On mouseenter over any <a href="#Doc.Type.Object">, a floating panel
+        shows the full content of the target <div id="Doc.Type.Object">.
+        The panel is capped at 20vh; if clipped, a '▼ truncated' indicator
+        is shown at the bottom.
+        """
+        css_js = """
+<style id="artifact-hover-style">
+#artifact-hover-tooltip {
+  display: none;
+  position: fixed;
+  max-width: 520px;
+  max-height: 30vh;
+  overflow: hidden;
+  background: #fffde7;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  padding: 8px 10px;
+  z-index: 9999;
+  font-size: 0.85em;
+  line-height: 1.4;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.25);
+  pointer-events: none;
+}
+#artifact-hover-tooltip.clipped::after {
+  content: "▼ truncated";
+  display: block;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  background: linear-gradient(transparent, #fffde7 60%);
+  color: #888;
+  font-size: 0.8em;
+  padding-top: 12px;
+}
+</style>
+<script id="artifact-hover-script">
+(function() {
+  var tip = document.createElement('div');
+  tip.id = 'artifact-hover-tooltip';
+  document.body.appendChild(tip);
+
+  document.querySelectorAll('a[href^="#"]').forEach(function(link) {
+    var href = link.getAttribute('href');
+    if (!/^#[A-Za-z]+\\.[A-Za-z]+\\./.test(href)) return;
+    var id = href.slice(1);
+    var target = document.getElementById(id);
+    if (!target) return;
+
+    link.addEventListener('mouseenter', function(e) {
+      tip.innerHTML = target.innerHTML;
+      tip.style.display = 'block';
+      // check if content overflows
+      tip.classList.toggle('clipped', tip.scrollHeight > tip.clientHeight + 2);
+      positionTip(e);
+    });
+    link.addEventListener('mousemove', positionTip);
+    link.addEventListener('mouseleave', function() {
+      tip.style.display = 'none';
+    });
+  });
+
+  function positionTip(e) {
+    var x = e.clientX + 14;
+    var y = e.clientY + 14;
+    // keep tooltip within viewport
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > vw - 8) x = e.clientX - tw - 14;
+    if (y + th > vh - 8) y = e.clientY - th - 14;
+    tip.style.left = x + 'px';
+    tip.style.top  = y + 'px';
+  }
+})();
+</script>
+"""
+        # Inject just before </body>
+        if '</body>' in html_content:
+            html_content = html_content.replace('</body>', css_js + '\n</body>', 1)
+        else:
+            html_content += css_js
+
+        if self.verbose:
+            print("  🖱️  Hover tooltips injected")
+        return html_content
 
     def clean(self) -> bool:
         """Runs the full cleaning pipeline"""
@@ -552,6 +647,8 @@ class MHTMLCleaner:
             html_cleaned = self._add_artifact_tooltips(html_cleaned, artifact_db)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
+            if self.include_hovering:
+                html_cleaned = self._inject_hovering(html_cleaned)
 
             if self.verbose:
                 print("  🔄 MHTML → HTML")
@@ -585,8 +682,10 @@ def main():
     parser.add_argument('-p', '--preserve-fitnesse', action='store_true')
     parser.add_argument('-b', '--remove-buttons', action='store_true', help='Remove editing buttons')
     parser.add_argument('-s', '--remove-sidenav', action='store_true', help='Remove sidenav panel')
-    parser.add_argument('-A', '--remove-all', action='store_true', help='Preset: enable -b, -s, -v')
+    parser.add_argument('-A', '--all', action='store_true', help='Preset: enable -b, -s, -v, -V, -H')
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-H', '--include-hovering', action='store_true',
+                        help='Inject JS hover tooltips showing artifact definitions')
     parser.add_argument('--version', action='version', version=f'mhtml-cleaner {__version__}')
     parser.add_argument('-V', '--validate', action='store_true',
                         help='Run HTML validator on output file after cleaning')
@@ -599,11 +698,13 @@ def main():
         print(f"❌ File not found: {args.input_file}", file=sys.stderr)
         sys.exit(1)
 
-    if args.remove_all:
+    if args.all:
         args.remove_buttons = True
         args.remove_sidenav = True
         args.verbose = True
-
+        args.include_hovering= True
+        args.validate = True
+        
     if args.output_file is None:
         args.output_file = str(Path(args.input_file).with_suffix('.html'))
 
@@ -615,6 +716,7 @@ def main():
         verbose=args.verbose,
         remove_buttons=args.remove_buttons,
         remove_sidenav=args.remove_sidenav,
+        include_hovering=args.include_hovering,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
             if args.database_file and not args.database_file.endswith('.csv')

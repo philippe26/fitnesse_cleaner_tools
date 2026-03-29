@@ -2,6 +2,25 @@
 
 ---
 
+## v2.5 — 2026-03-29
+
+### New: `--include-hovering` / `-H`
+Injects a JS + CSS hover tooltip system into the output HTML. Hovering over any `<a href="#Doc.Type.Object">` displays the full content of the target `<div>` in a floating panel capped at 30% of screen height, with a `▼ truncated` indicator when clipped. When active, the native `title=` attribute is suppressed to avoid double display.
+
+### New: `-A` preset extended
+`-A` / `--all` now enables `-b`, `-s`, `-v`, `-V`, and `-H`.
+
+### Fix: validator output ordering
+Test detail lines were printed before the ✅/❌ indicator. Details are now accumulated during the test and printed after the result line, so the indicator always appears first.
+
+### Fix: validator false "0 unused" message
+`Artifact definitions are all used` no longer prints `0 unused definition(s)` when everything is referenced — it now shows `all N definition(s) referenced`.
+
+### New: validator section in README
+`test-html-validator.py` is now documented with its full test list and an output example.
+
+---
+
 ## v2.4 — 2026-03-29
 
 ### Fix: artifact database — regex and doc prefix filter
