@@ -25,20 +25,19 @@
 ## Usage
 
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.html [options]
+python3 mhtml-cleaner.py input.mhtml [options]
 ```
 
 ### Options
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--output` | `-o` | _(required)_ | Output file |
+| `--output` | `-o` | input name with `.html` extension | Output file |
 | `--level {light,moderate,strict}` | `-l` | `moderate` | Link cleaning level |
-| `--format {html,mhtml}` | | `html` | Output format |
 | `--preserve-fitnesse` | `-p` | off | Keep FitNesse links even if broken |
-| `--preserve-css` | `-c` | off | Keep external CSS imports without injecting them |
-| `--remove-buttons` | | off | Remove editing buttons |
-| `--remove-sidenav` | | off | Remove the side navigation panel |
+| `--remove-buttons` | `-b` | off | Remove editing buttons |
+| `--remove-sidenav` | `-s` | off | Remove the side navigation panel |
+| `--remove-all` | `-A` | off | Preset: enables `-b`, `-s`, `-v` |
 | `--verbose` | `-v` | off | Print details of each transformation |
 | `--help` | `-h` | | Show help |
 
@@ -72,29 +71,29 @@ Same as `moderate`, but actively removes non-functional links instead of replaci
 
 ## Examples
 
-### Standard conversion
+### Standard conversion (output defaults to `input.html`)
+```bash
+python3 mhtml-cleaner.py input.mhtml
+```
+
+### Specify output file
 ```bash
 python3 mhtml-cleaner.py input.mhtml -o output.html
 ```
 
-### Verbose mode for diagnostics
+### Full cleanup with verbose output
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.html --verbose
+python3 mhtml-cleaner.py input.mhtml -A
 ```
 
-### Full cleanup (buttons + sidebar removed)
+### Buttons and sidebar removed, strict level
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.html --remove-buttons --remove-sidenav
-```
-
-### Strict cleanup with details
-```bash
-python3 mhtml-cleaner.py input.mhtml -o output.html --level strict --verbose
+python3 mhtml-cleaner.py input.mhtml -b -s --level strict
 ```
 
 ### Keep original links (even broken ones)
 ```bash
-python3 mhtml-cleaner.py input.mhtml -o output.html --preserve-fitnesse
+python3 mhtml-cleaner.py input.mhtml --preserve-fitnesse
 ```
 
 ---
@@ -110,8 +109,8 @@ The script applies transformations in the following order:
 5. Inject embedded CSS into a `<style>` tag
 6. Extract and inject images as base64
 7. Clean data URLs in CSS
-8. Remove buttons _(if `--remove-buttons`)_
-9. Remove sidebar _(if `--remove-sidenav`)_
+8. Remove buttons _(if `-b` or `-A`)_
+9. Remove sidebar _(if `-s` or `-A`)_
 10. Remove `cid:` references (MHTML-specific)
 11. Save as plain HTML
 
@@ -131,7 +130,7 @@ The generated HTML file is **100% self-contained**:
 
 ### Page displays without styles
 
-The CSS was not injected. Use `--verbose` to check that CSS sections are detected in the MHTML.
+The CSS was not injected. Use `-v` to check that CSS sections are detected in the MHTML.
 
 ### Anchors do not work
 
@@ -139,7 +138,7 @@ Anchor links point to sections that no longer exist in the document. This is exp
 
 ### Main page not detected correctly
 
-Use `--verbose` to check the `Main page detected` line. The script attempts three detection methods in sequence: MHTML header, most frequent URLs, HTML title tag.
+Use `-v` to check the `Main page` line. The script attempts three detection methods in sequence: MHTML header, most frequent URLs, HTML title tag.
 
 ---
 

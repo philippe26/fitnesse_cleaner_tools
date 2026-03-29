@@ -2,6 +2,23 @@
 
 ---
 
+## v2.2.5 — 2026-03-29
+
+### Changes
+- **`--preserve-css` option removed**: it was declared but never implemented (dead code)
+
+---
+
+## v2.2.4 — 2026-03-29
+
+### Changes
+- **`-o` is now optional**: if omitted, the output file defaults to the input filename with a `.html` extension
+- **`--format` option removed**: output is always plain HTML
+- **`-A` / `--remove-all` added**: preset that enables `-b` (remove buttons), `-s` (remove sidenav), and `-v` (verbose) in a single flag
+- **Comments and messages translated to English** throughout the script
+
+---
+
 ## v2.2.3 — 2026-03-28
 
 ### Fix: button removal not working
