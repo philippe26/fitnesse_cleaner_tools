@@ -1,4 +1,12 @@
 # CHANGELOG - mhtml-cleaner.py
+---
+
+## v2.7.1 — 2026-03-31
+
+### New: add types operational, significant to review
+
+### New: add basic script for Excel VBA (& libreoffice)
+Scripts import & export json in RPP excel files
 
 ---
 

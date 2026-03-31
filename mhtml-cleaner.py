@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.7'
+__version__ = '2.7.1'
 
 import re
 import csv
@@ -906,9 +906,12 @@ class MHTMLCleaner:
   padding: 1px 5px; border-radius: 3px; color: #fff;
   white-space: nowrap; flex-shrink: 0;
 }
-.review-major   .review-badge { background: #c62828; }
-.review-minor   .review-badge { background: #ef6c00; }
-.review-comment .review-badge { background: #1565c0; }
+.review-operational .review-badge { background: #6a1b9a; }
+.review-significant .review-badge { background: #ad1457; }
+.review-major       .review-badge { background: #c62828; }
+.review-minor       .review-badge { background: #ef6c00; }
+.review-typo        .review-badge { background: #558b2f; }
+.review-comment     .review-badge { background: #1565c0; }
 .review-meta { color: #90a4ae; font-size: .82em; white-space: nowrap; flex-shrink: 0; }
 .review-text { color: #37474f; }
 </style>
@@ -1138,7 +1141,7 @@ class MHTMLCleaner:
 
   function _showMenu(x, y, aid) {
     _menu.innerHTML = '';
-    [['🔴', 'Major'], ['🟠', 'Minor'], ['🔵', 'Comment']].forEach(function(p) {
+    [['🟣','Operational'],['🔶','Significant'],['🔴','Major'],['🟠','Minor'],['🟢','Typo'],['🔵','Comment']].forEach(function(p) {
       var it = document.createElement('div');
       if (_connected) {
         it.className = 'review-menu-item';
