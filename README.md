@@ -52,6 +52,7 @@ python3 mhtml-cleaner.py input.mhtml [options]
 | `--remove-sidenav` | `-s` | off | Remove the side navigation panel |
 | `--include-hovering` | `-H` | off | Inject JS hover tooltips for artifact links |
 | `--include-review` | `-R` | off | Inject right-click review annotation system |
+| `--remove-traceability` | `-t` | off | Remove traceability nav-pills blocks entirely |
 | `--all` | `-A` | off | Preset: enables `-b`, `-s`, `-v`, `-V`, `-H` |
 | `--verbose` | `-v` | off | Print details of each transformation |
 | `--validate` | `-V` | off | Run HTML validator on output after cleaning |
@@ -388,10 +389,11 @@ On connect (clicking the banner button):
 10. Remove buttons _(if `-b` or `-A`)_
 11. Remove sidebar _(if `-s` or `-A`)_
 12. Inject hover JS+CSS _(if `-H`)_
-13. Inject review annotation system _(if `-R`)_
-14. Remove `cid:` references (MHTML-specific)
-15. Save as plain HTML
-16. Run validator _(if `-V`)_
+13. Transform or remove traceability nav-pills _(always, or `-t` to remove)_
+14. Inject review annotation system _(if `-R`)_
+15. Remove `cid:` references (MHTML-specific)
+16. Save as plain HTML
+17. Run validator _(if `-V`)_
 
 ---
 

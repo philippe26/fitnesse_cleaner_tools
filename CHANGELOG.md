@@ -2,6 +2,26 @@
 
 ---
 
+## v2.7 — 2026-03-31
+
+### New: traceability nav-pills transformation
+`<ul class="nav nav-pills">` traceability blocks are now automatically transformed into clean static HTML dropdowns using `<details>`/`<summary>` elements — no JavaScript required:
+- The "Traceability Links" label is rendered as a static badge
+- Each dropdown button (Verified by, Allocated by, Complies, Satisfied by…) becomes a clickable `<details>` with its item list; edit links are stripped
+- Item counts appear as coloured badges (grey when zero)
+
+### New: `--remove-traceability` / `-t`
+When active, traceability blocks are removed entirely instead of being transformed.
+
+### New: `--include-review` / `-R` — file picker dialog
+The `CONNECT JSON REVIEW FILE` button now opens an in-page dialog with two explicit choices:
+- **Open existing file…** → `showOpenFilePicker` (no overwrite warning)
+- **Create new file** → `showSaveFilePicker` (new file only)
+
+This avoids the native browser "file will be overwritten" warning when opening an existing review file.
+
+---
+
 ## v2.6 — 2026-03-29
 
 ### New: `--include-review` / `-R`

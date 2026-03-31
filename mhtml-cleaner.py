@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.6'
+__version__ = '2.7'
 
 import re
 import csv
@@ -41,7 +41,8 @@ class MHTMLCleaner:
                  remove_buttons: bool = False, remove_sidenav: bool = False,
                  database_file: str = None,
                  include_hovering: bool = False,
-                 include_review: bool = False):
+                 include_review: bool = False,
+                 remove_traceability: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -52,6 +53,7 @@ class MHTMLCleaner:
         self.database_file = database_file
         self.include_hovering = include_hovering
         self.include_review = include_review
+        self.remove_traceability = remove_traceability
 
         self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
@@ -522,6 +524,248 @@ class MHTMLCleaner:
 
         pattern = r'<a\s[^>]*href="(#[A-Za-z]+\.[A-Za-z]+\.[A-Za-z]+)"[^>]*>'
         return re.sub(pattern, add_title, html_content, flags=re.IGNORECASE)
+
+    # ------------------------------------------------------------------ traceability
+
+    def _find_closing_tag(self, html: str, start: int, tag: str) -> int:
+        """Return the index just after the </tag> that matches the opening <tag> at `start`.
+
+        Counts nested open/close pairs so embedded tags of the same type are
+        handled correctly (e.g. <ul> inside a <li> inside the outer <ul>).
+        Returns -1 if no matching closing tag is found.
+        """
+        depth = 0
+        pattern = re.compile(
+            rf'<(/?)({re.escape(tag)})\b[^>]*>',
+            re.IGNORECASE
+        )
+        for m in pattern.finditer(html, start):
+            if m.group(1):   # closing tag  </tag>
+                depth -= 1
+                if depth == 0:
+                    return m.end()
+            else:            # opening tag  <tag ...>
+                depth += 1
+        return -1
+
+    def _transform_traceability_navpills(self, html_content: str) -> str:
+        """Finds <ul class="nav nav-pills"> traceability blocks and either:
+          - removes them completely (--remove-traceability)
+          - replaces them with clean static HTML using <details>/<summary> dropdowns
+
+        The enclosing <div> is also consumed so no empty container is left.
+        """
+        CSS = """<style id="traceability-style">
+/* Isolation: reset Bootstrap interference on our elements */
+.trace-nav, .trace-nav * { box-sizing: border-box; }
+.trace-nav {
+  display: flex !important; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 4px 0 8px; padding: 0 !important;
+  font-family: sans-serif !important; font-size: .82em;
+  list-style: none !important; border: none !important;
+  background: transparent !important;
+}
+.trace-title {
+  font-weight: bold; color: #37474f; padding: 3px 10px;
+  background: #eceff1 !important; border-radius: 3px;
+  white-space: nowrap; border: none !important;
+}
+/* details element acting as dropdown */
+.trace-dd {
+  position: relative !important; display: inline-block !important;
+  margin: 0 !important; padding: 0 !important;
+  border: none !important; background: transparent !important;
+}
+.trace-dd > summary {
+  display: inline-block !important; list-style: none !important;
+  padding: 3px 10px !important; margin: 0 !important;
+  background: #fff !important; border: 1px solid #b0bec5 !important;
+  border-radius: 3px !important; cursor: pointer !important;
+  color: #455a64 !important; white-space: nowrap !important;
+  user-select: none; font-size: 1em !important;
+  font-family: sans-serif !important; font-weight: normal !important;
+  text-decoration: none !important;
+}
+.trace-dd > summary::-webkit-details-marker { display: none !important; }
+.trace-dd > summary::marker { display: none !important; }
+.trace-dd > summary::after { content: " \u25be"; color: #90a4ae !important; }
+.trace-dd[open] > summary { background: #e3f2fd !important; border-color: #90caf9 !important; }
+.trace-dd[open] > summary::after { content: " \u25b4"; }
+/* badge inside summary */
+.trace-badge {
+  display: inline-block !important;
+  background: #78909c !important; color: #fff !important;
+  border-radius: 8px !important; padding: 0 5px !important;
+  font-size: .76em !important; margin-left: 4px !important;
+  min-width: 0 !important; font-weight: bold !important;
+  vertical-align: middle !important; line-height: 1.5 !important;
+}
+.trace-badge.zero { background: #cfd8dc !important; color: #607d8b !important; }
+/* dropdown list */
+.trace-list {
+  position: absolute !important; top: calc(100% + 2px) !important;
+  left: 0 !important; z-index: 5000 !important;
+  background: #fff !important; border: 1px solid #b0bec5 !important;
+  border-radius: 3px !important;
+  box-shadow: 2px 4px 10px rgba(0,0,0,.18) !important;
+  padding: 4px 0 !important; list-style: none !important;
+  min-width: 220px !important; margin: 0 !important;
+  max-height: 50vh; overflow-y: auto;
+}
+.trace-list li {
+  display: block !important; padding: 5px 14px !important;
+  color: #37474f !important; white-space: nowrap !important;
+  font-size: .9em !important; font-family: sans-serif !important;
+  background: transparent !important; border: none !important;
+  float: none !important; margin: 0 !important;
+}
+.trace-list li:hover { background: #f5f5f5 !important; }
+.trace-none { color: #90a4ae !important; font-style: italic !important; }
+</style>
+<script id="traceability-close-script">
+(function() {
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.trace-dd')) {
+      document.querySelectorAll('.trace-dd[open]').forEach(function(d) { d.open = false; });
+    }
+  });
+})();
+</script>
+"""
+        ul_re = re.compile(
+            r'<ul\b[^>]*class=["\'][^"\']*\bnav\b[^"\']*\bpills\b[^"\']*["\'][^>]*>',
+            re.IGNORECASE
+        )
+        css_done = False
+        out = html_content
+        pos = 0
+
+        while True:
+            m = ul_re.search(out, pos)
+            if not m:
+                break
+
+            ul_start = m.start()
+            ul_end = self._find_closing_tag(out, ul_start, 'ul')
+            if ul_end == -1:
+                pos = m.end()
+                continue
+
+            ul_html = out[ul_start:ul_end]
+
+            # Find the wrapping <div> immediately before this <ul> (only whitespace between)
+            pre = out[max(0, ul_start - 300):ul_start]
+            div_matches = list(re.finditer(r'<div\b[^>]*>', pre, re.IGNORECASE))
+            repl_start, repl_end = ul_start, ul_end
+            if div_matches:
+                last = div_matches[-1]
+                if re.match(r'^\s*$', pre[last.end():]):
+                    abs_div = max(0, ul_start - 300) + last.start()
+                    div_end = self._find_closing_tag(out, abs_div, 'div')
+                    if div_end != -1:
+                        repl_start, repl_end = abs_div, div_end
+
+            if self.remove_traceability:
+                out = out[:repl_start] + out[repl_end:]
+                pos = repl_start
+            else:
+                repl = self._build_traceability_block(ul_html)
+                if repl and not css_done:
+                    repl = CSS + repl
+                    css_done = True
+                out = out[:repl_start] + repl + out[repl_end:]
+                pos = repl_start + len(repl)
+
+        if self.verbose:
+            action = 'removed' if self.remove_traceability else 'transformed'
+            print(f"  🔗 Traceability nav-pills {action}")
+        return out
+
+    def _build_traceability_block(self, ul_html: str) -> str:
+        """Parses a nav-pills <ul> block and returns clean static HTML."""
+
+        # Title from <li class="active">
+        title_m = re.search(
+            r'<li\b[^>]*\bactive\b[^>]*>.*?<a\b[^>]*>(.*?)</a>',
+            ul_html, re.DOTALL | re.IGNORECASE
+        )
+        title = re.sub(r'<[^>]+>', '', title_m.group(1)).strip() if title_m else ''
+
+        # Each <li class="dropdown"> — use _find_closing_tag for correct nesting
+        dropdowns = []
+        li_re = re.compile(r'<li\b[^>]*\bdropdown\b[^>]*>', re.IGNORECASE)
+        li_pos = 0
+        while True:
+            lm = li_re.search(ul_html, li_pos)
+            if not lm:
+                break
+            li_end = self._find_closing_tag(ul_html, lm.start(), 'li')
+            if li_end == -1:
+                li_pos = lm.end()
+                continue
+            inner = ul_html[lm.end():li_end]
+
+            # Button label + badge from dropdown-toggle <a>
+            toggle_m = re.search(
+                r'<a\b[^>]*\bdropdown-toggle\b[^>]*>(.*?)</a>',
+                inner, re.DOTALL | re.IGNORECASE
+            )
+            label, badge = '', ''
+            if toggle_m:
+                toggle_html = toggle_m.group(1)
+                bm = re.search(r'<span\b[^>]*\bbadge\b[^>]*>(\d+)</span>',
+                               toggle_html, re.IGNORECASE)
+                badge = bm.group(1) if bm else ''
+                # Remove all <span>...</span> before stripping tags so that
+                # the badge number and caret text don't appear in the label
+                toggle_no_spans = re.sub(r'<span\b[^>]*>.*?</span>', '',
+                                         toggle_html, flags=re.DOTALL | re.IGNORECASE)
+                label = re.sub(r'<[^>]+>', '', toggle_no_spans).strip()
+
+            # Items from <ul class="dropdown-menu"> — skip dividers and edit links
+            items = []
+            menu_m = re.search(
+                r'<ul\b[^>]*\bdropdown-menu\b[^>]*>(.*?)</ul>',
+                inner, re.DOTALL | re.IGNORECASE
+            )
+            if menu_m:
+                for item_m in re.finditer(
+                    r'<li(\b[^>]*)>(.*?)</li\s*>',
+                    menu_m.group(1), re.DOTALL | re.IGNORECASE
+                ):
+                    if 'divider' in item_m.group(1):
+                        continue
+                    if re.search(r'<a\b[^>]*\bedit\b', item_m.group(2), re.IGNORECASE):
+                        continue
+                    text = re.sub(r'<[^>]+>', '', item_m.group(2)).strip()
+                    if text:
+                        items.append(text)
+
+            dropdowns.append((label, badge, items))
+            li_pos = li_end
+
+        if not title and not dropdowns:
+            return ''
+
+        parts = ['<div class="trace-nav">']
+        if title:
+            parts.append(f'<span class="trace-title">{title}</span>')
+        for label, badge, items in dropdowns:
+            zero = badge == '0'
+            badge_cls = 'trace-badge zero' if zero else 'trace-badge'
+            badge_html = f' <span class="{badge_cls}">{badge}</span>' if badge else ''
+            if items:
+                lis = ''.join(f'<li>{i}</li>' for i in items)
+            else:
+                lis = '<li class="trace-none">(none)</li>'
+            parts.append(
+                f'<details class="trace-dd">'
+                f'<summary>{label}{badge_html}</summary>'
+                f'<ul class="trace-list">{lis}</ul>'
+                f'</details>'
+            )
+        parts.append('</div>')
+        return '\n'.join(parts)
 
     def _inject_review_system(self, html_content: str) -> str:
         """Injects CSS + JS for a right-click review annotation system.
@@ -1138,6 +1382,7 @@ class MHTMLCleaner:
             if self.database_file:
                 self._export_database_csv(artifact_db)
             html_cleaned = self._add_artifact_tooltips(html_cleaned, artifact_db)
+            html_cleaned = self._transform_traceability_navpills(html_cleaned)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
             if self.include_hovering:
@@ -1183,6 +1428,8 @@ def main():
                         help='Inject JS hover tooltips showing artifact definitions')
     parser.add_argument('-R', '--include-review', action='store_true',
                         help='Inject review annotation system (right-click on artifacts)')
+    parser.add_argument('-t', '--remove-traceability', action='store_true',
+                        help='Remove traceability nav-pills blocks entirely')
     parser.add_argument('--version', action='version', version=f'mhtml-cleaner {__version__}')
     parser.add_argument('-V', '--validate', action='store_true',
                         help='Run HTML validator on output file after cleaning')
@@ -1215,6 +1462,7 @@ def main():
         remove_sidenav=args.remove_sidenav,
         include_hovering=args.include_hovering,
         include_review=args.include_review,
+        remove_traceability=args.remove_traceability,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
             if args.database_file and not args.database_file.endswith('.csv')
