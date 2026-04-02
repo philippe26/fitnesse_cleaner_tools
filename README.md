@@ -52,6 +52,7 @@ python3 mhtml-cleaner.py input.mhtml [options]
 | `--remove-sidenav` | `-s` | off | Remove the side navigation panel |
 | `--include-hovering` | `-H` | off | Inject JS hover tooltips for artifact links |
 | `--include-review` | `-R` | off | Inject right-click review annotation system |
+| `--review-extra-tags` | | off | Add Operational, Significant and Typo types to the review menu (requires `-R`) |
 | `--remove-traceability` | `-t` | off | Remove traceability nav-pills blocks entirely |
 | `--all` | `-A` | off | Preset: enables `-b`, `-s`, `-v`, `-V`, `-H` |
 | `--verbose` | `-v` | off | Print details of each transformation |
@@ -246,7 +247,9 @@ The name is stored in `localStorage` and persists across browser sessions.
 
 ### Adding a review
 
-Right-click any artifact (any section with a coloured border visible on hover) to open the context menu:
+Right-click any artifact (any section with a coloured border visible on hover) to open the context menu.
+
+**Default tags** (`-R` only):
 
 ```
 🔴 Add Major
@@ -256,8 +259,24 @@ Right-click any artifact (any section with a coloured border visible on hover) t
 👤 philippe (change…)
 ```
 
+**Extended tags** (`-R --review-extra-tags`):
+
+```
+🟣 Add Operational
+🔶 Add Significant
+🔴 Add Major
+🟠 Add Minor
+🟢 Add Typo
+🔵 Add Comment
+──────────────
+👤 philippe (change…)
+```
+
+- **Operational** — impacts operation or safety (e.g. wrong operating condition)
+- **Significant** — significant non-conformity that requires resolution before approval
 - **Major** — blocking issue, non-conformity, or requirement violation
 - **Minor** — non-blocking issue, suggestion, or improvement
+- **Typo** — typographical error or formatting issue
 - **Comment** — general remark, question, or observation
 
 Clicking a menu item opens a standard browser `prompt()` dialog:
@@ -302,6 +321,25 @@ Each row shows:
 
 ---
 
+### Chapter / heading review
+
+In addition to artifact `<div>` elements, the review system also attaches to **section headings** when `-R` is active.
+
+Any heading matching this pattern is automatically made reviewable:
+
+```html
+<h1 id="1" title-numbering="1">...</h1>
+<h2 id="1.2" title-numbering="1.2">...</h2>
+<h3 id="1.2.3" title-numbering="1.2.3">...</h3>
+```
+
+- Tag must be `h1` to `h5`
+- Both `id` and `title-numbering` attributes must be present and contain a dotted numeric value (e.g. `1`, `2.3`, `1.2.4`)
+
+The review is stored with `artifact` set to the `title-numbering` value and `artifact-type` set to `Section`. The heading gains the same right-click context menu as artifact divs, and review blocks appear inline below it.
+
+---
+
 ### JSON file format
 
 The review file is plain JSON, human-readable and easy to share:
@@ -336,7 +374,7 @@ The review file is plain JSON, human-readable and easy to share:
 |-------|------|-------------|
 | `user` | string | Reviewer OS login |
 | `artifact` | string | Full artifact id (`Doc.Type.Object`) |
-| `context` | string | `Major`, `Minor`, or `Comment` |
+| `context` | string | `Major`, `Minor`, `Comment` — or `Operational`, `Significant`, `Typo` with `--review-extra-tags` |
 | `text` | string | Free-form annotation text |
 | `date` | string | Timestamp `YYYY-MM-DD HH:MM` |
 
@@ -362,16 +400,34 @@ The system uses two storage layers:
 
 | Layer | Scope | Speed | Survives browser close? |
 |-------|-------|-------|------------------------|
-| `localStorage` | Browser, per document title | Instant | Yes |
+| `localStorage` | Browser, per document URL | Instant | Yes |
 | JSON file on disk | Filesystem | Fast (async write) | Yes, shareable |
 
 On boot:
 1. `localStorage` is read immediately — cached reviews appear without any file dialog
 2. If a file handle was stored in IndexedDB from a previous session, Chrome silently reconnects and reads the JSON file (source of truth), updating the `localStorage` cache
 
-On connect (clicking the banner button):
-- **Existing file selected** → file is read; `localStorage` is overwritten with the file's content
-- **New file created** → `localStorage` content is written into the new file; future adds go to both
+---
+
+### Session decision logic
+
+When clicking **CONNECT JSON REVIEW FILE**, the behaviour depends on whether the current browser session already has data in `localStorage`:
+
+#### Fresh session (no data in localStorage)
+
+| Action | Result |
+|--------|--------|
+| **Open existing file** | File is loaded directly; `localStorage` is populated from it |
+| **Create new file** | Empty file is created; session starts fresh |
+
+#### Active session (localStorage has data)
+
+| Action | Dialog | Options |
+|--------|--------|---------|
+| **Open existing file** | _"You have N review(s) in this session. The file contains M review(s)."_ | **Merge** — union of both sets (no duplicates) · **Replace** — use file only, discard session data · **Cancel** |
+| **Create new file** | _"You have N review(s) in this session."_ | **Save session data into the new file** · **Discard session data — start fresh** · **Cancel** |
+
+> **Auto-reconnect** (IndexedDB handle present from a previous session): the file is loaded silently as source of truth, overwriting `localStorage`. No dialog is shown.
 
 ---
 

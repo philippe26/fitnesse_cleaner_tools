@@ -1,6 +1,64 @@
 # CHANGELOG - mhtml-cleaner.py
 ---
 
+## v2.7.2 — 2026-04-02
+
+### Fix: "Change status" prompt showed nothing (REVIEW_TAGS not defined)
+`REVIEW_TAGS` was injected by Python only as an inline array literal in the `.forEach` call, leaving it undefined everywhere else in the script. It is now declared as a named JS variable (`var REVIEW_TAGS = [...]`) so `_changeStatus`, `_showMenu`, and any future function can all reference it.
+
+---
+
+### New: `--review-extra-tags`
+When `-R` is active, the context menu shows only **Major**, **Minor**, **Comment** by default.
+Adding `--review-extra-tags` extends the menu with **Operational**, **Significant**, and **Typo**.
+
+| Tag | Colour | Meaning |
+|-----|--------|---------|
+| Operational | 🟣 purple | Impacts operation or safety |
+| Significant | 🔶 orange | Significant non-conformity requiring resolution before approval |
+| Major | 🔴 red | Blocking issue, non-conformity, or requirement violation |
+| Minor | 🟠 amber | Non-blocking issue, suggestion, or improvement |
+| Typo | 🟢 green | Typographical or formatting error |
+| Comment | 🔵 blue | General remark, question, or observation |
+
+### New: chapter/heading review (`-R`)
+Headings `<h1>`–`<h5>` that carry both an `id` and a `title-numbering` attribute with dotted numeric values (e.g. `<h2 id="1.2" title-numbering="1.2">`) are now automatically made reviewable when `-R` is active. They receive the same right-click context menu as artifact divs, and review blocks appear inline below them. Reviews are stored with `artifact-type = "Section"` and `artifact = <title-numbering value>`.
+
+### New: session-aware file connection logic
+The behaviour when clicking **CONNECT JSON REVIEW FILE** now depends on whether `localStorage` already contains review data from an active session:
+
+| Session state | Action | Behaviour |
+|--------------|--------|-----------|
+| Fresh (no LS data) | Open file | Load file directly |
+| Fresh (no LS data) | New file | Create empty file |
+| Active (LS has data) | Open file | Dialog: **Merge** (union, no duplicates) or **Replace** (file wins) |
+| Active (LS has data) | New file | Dialog: **Save session data** into new file or **Discard** and start fresh |
+
+Auto-reconnect (IndexedDB) always loads the file silently as source of truth.
+
+### New: per-row actions in the review block
+Each review entry now shows three small action buttons (visible only when a file is connected):
+- **✏️** — edit the review text
+- **🔄** — change the review status (choose from available tags)
+- **❌** — delete this individual review
+
+### New: Remove all in the right-click context menu
+When reviews exist for an artifact, a **🗑️ Remove all reviews (N)** item appears at the bottom of the "add" section. A confirmation dialog is shown before deletion. Hidden when no reviews exist.
+
+### New: chapter artifact id uses §-prefixed heading text
+For headings (`<h1>`–`<h5>`), the JSON `artifact` field is now the visible heading text prefixed with `§` and with whitespace normalised:
+- `<h1 title-numbering="7." ...>3        FUNCTIONAL DESCRIPTION</h1>` → `"artifact": "§3 FUNCTIONAL DESCRIPTION"`
+
+The HTML attribute `artifact-label` carries this value; `artifact` holds a sanitised DOM slug for internal use.
+
+### Fix: headings not matching for review (`-R`)
+The regex for `title-numbering` now correctly handles trailing dots (e.g. `"5."`, `"1.2."`) and simple integer `id` values. Reviews on `<h1>`–`<h5>` headings now work as expected.
+
+### New: hover indicator on reviewable elements
+All elements with `artifact-type` and `artifact` attributes now show a dashed outline and `context-menu` cursor on hover, making reviewable headings and artifact divs clearly identifiable.
+
+---
+
 ## v2.7.1 — 2026-03-31
 
 ### New: add types operational, significant to review

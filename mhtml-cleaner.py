@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.7.1'
+__version__ = '2.7.2'
 
 import re
 import csv
@@ -42,6 +42,7 @@ class MHTMLCleaner:
                  database_file: str = None,
                  include_hovering: bool = False,
                  include_review: bool = False,
+                 review_extra_tags: bool = False,
                  remove_traceability: bool = False):
         self.input_file = input_file
         self.output_file = output_file
@@ -53,6 +54,7 @@ class MHTMLCleaner:
         self.database_file = database_file
         self.include_hovering = include_hovering
         self.include_review = include_review
+        self.review_extra_tags = review_extra_tags
         self.remove_traceability = remove_traceability
 
         self.port = self._extract_port()
@@ -548,6 +550,66 @@ class MHTMLCleaner:
                 depth += 1
         return -1
 
+    def _tag_headings_for_review(self, html_content: str) -> str:
+        """Adds artifact/artifact-type attributes to headings eligible for review.
+
+        Matches complete <hX ...>text</hX> elements where:
+        - X is 1-5
+        - The opening tag has both id (integer) and title-numbering (dotted numeric,
+          optionally ending with a dot, e.g. "5.", "1.2.", "3.0.1.")
+        - The element has not already been tagged with artifact=
+
+        The artifact value stored in JSON is built from the visible text of the heading:
+          §<text_cleaned>
+        where <text_cleaned> strips HTML tags, collapses whitespace, and normalises
+        multiple spaces/tabs to a single space.
+        Example: <h1 title-numbering="7." ...>3        FUNCTIONAL DESCRIPTION</h1>
+                 → artifact="§3 FUNCTIONAL DESCRIPTION"
+
+        The HTML attribute artifact= is set to the same §-prefixed value so it can
+        be used as a stable DOM id (spaces are safe in data attributes).
+        The rv-{aid} wrapper id uses a sanitised slug (spaces→underscores).
+        """
+        def _extract_text(inner_html):
+            """Strip HTML tags and collapse whitespace from heading inner content."""
+            text = re.sub(r'<[^>]+>', '', inner_html)
+            text = re.sub(r'[ \t]+', ' ', text).strip()
+            return text
+
+        def _tag(m):
+            open_tag = m.group(1)   # full opening tag <hX ...>
+            tag      = m.group(2)   # h1..h5
+            attrs    = m.group(3)   # attributes inside <hX ...>
+            inner    = m.group(4)   # content between tags
+            close    = m.group(5)   # </hX>
+
+            # Skip if already tagged
+            if 'artifact=' in open_tag:
+                return m.group(0)
+
+            tn_m = re.search(r'\btitle-numbering=["\']([0-9]+(?:\.[0-9]*)*\.?)["\']', attrs)
+            if not tn_m:
+                return m.group(0)
+
+            text = _extract_text(inner)
+            if not text:
+                return m.group(0)
+
+            # artifact= is the DOM slug (used for rv-{id} wrapper), safe for HTML id
+            # artifact-label= is the human-readable value stored in JSON (§-prefixed)
+            slug  = re.sub(r'[^A-Za-z0-9_-]', '_', text)
+            label = '\u00a7' + text   # § prefix
+            return (f'<{tag}{attrs} artifact="{slug}"'
+                    f' artifact-label="{label}"'
+                    f' artifact-type="Section">{inner}{close}')
+
+        return re.sub(
+            r'(<(h[1-5])((?:\s+[^>]*)?)\s*>)(.*?)(</h[1-5]>)',
+            _tag,
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
     def _transform_traceability_navpills(self, html_content: str) -> str:
         """Finds <ul class="nav nav-pills"> traceability blocks and either:
           - removes them completely (--remove-traceability)
@@ -767,7 +829,7 @@ class MHTMLCleaner:
         parts.append('</div>')
         return '\n'.join(parts)
 
-    def _inject_review_system(self, html_content: str) -> str:
+    def _inject_review_system(self, html_content: str, extra_tags: bool = False) -> str:
         """Injects CSS + JS for a right-click review annotation system.
 
         A prominent "CONNECT JSON REVIEW FILE" banner is placed at the very top.
@@ -849,6 +911,13 @@ class MHTMLCleaner:
 }
 .rv-picker-cancel:hover { color: #546e7a; }
 
+/* ── Reviewable elements hover indicator ──────────── */
+[artifact-type][artifact]:hover {
+  outline: 2px dashed #90a4ae;
+  outline-offset: 2px;
+  cursor: context-menu;
+}
+
 /* ── Context menu ─────────────────────────────────── */
 #review-context-menu {
   position: fixed; z-index: 10002;
@@ -860,9 +929,11 @@ class MHTMLCleaner:
 .review-menu-item { padding: 7px 16px; cursor: pointer; white-space: nowrap; }
 .review-menu-item:hover:not(.review-menu-disabled) { background: #e8f0fe; }
 .review-menu-disabled { color: #bdbdbd; cursor: not-allowed; }
-.review-menu-warn { color: #e65100; font-size: .85em; }
-.review-menu-sep  { border-top: 1px solid #e0e0e0; margin: 4px 0; }
-.review-menu-user { color: #78909c; font-style: italic; font-size: .85em; }
+.review-menu-warn   { color: #e65100; font-size: .85em; }
+.review-menu-sep    { border-top: 1px solid #e0e0e0; margin: 4px 0; }
+.review-menu-user   { color: #78909c; font-style: italic; font-size: .85em; }
+.review-menu-remove { color: #c62828; }
+.review-menu-remove:hover { background: #ffebee !important; }
 
 /* ── Review container: L connector + frame ─────────── */
 .review-container {
@@ -896,11 +967,19 @@ class MHTMLCleaner:
 
 /* ── Individual review rows ───────────────────────── */
 .review-entry {
-  display: flex; align-items: baseline; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
   padding: 3px 0; font-size: .83em; font-family: sans-serif;
   border-bottom: 1px solid #eceff1;
 }
 .review-entry:last-child { border-bottom: none; }
+.review-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.rv-act-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: .85em; padding: 0 2px; opacity: 0.35;
+  line-height: 1;
+}
+.rv-act-btn:hover { opacity: 1; }
+.rv-act-del:hover { color: #c62828; }
 .review-badge {
   font-weight: bold; font-size: .7em; text-transform: uppercase;
   padding: 1px 5px; border-radius: 3px; color: #fff;
@@ -922,10 +1001,11 @@ class MHTMLCleaner:
   /* ── Config ─────────────────────────────────────────────────────── */
   var _base = decodeURIComponent(location.pathname).split('/').pop()
                 .replace(/\.html?$/i, '');
-  var SUGGESTED = _base + '_review.json';
-  var IDB_KEY   = 'rv:' + _base;
-  var LS_KEY    = 'rv-data:' + _base;
-  var USER_KEY  = 'rv-user';
+  var SUGGESTED  = _base + '_review.json';
+  var IDB_KEY    = 'rv:' + _base;
+  var LS_KEY     = 'rv-data:' + _base;
+  var USER_KEY   = 'rv-user';
+  var REVIEW_TAGS = REVIEW_TAGS_PLACEHOLDER;
 
   /* ── State ──────────────────────────────────────────────────────── */
   var _handle    = null;   // FileSystemFileHandle
@@ -988,27 +1068,109 @@ class MHTMLCleaner:
     } catch(e) { console.warn('Review save failed:', e); }
   }
 
-  async function _fileConnect(h) {
+  async function _fileConnect(h, isNew, silent) {
     try {
       var perm = await h.queryPermission({mode: 'readwrite'});
       if (perm !== 'granted') perm = await h.requestPermission({mode: 'readwrite'});
       if (perm !== 'granted') return false;
       var f = await h.getFile();
-      if (f.size > 0) {
-        // File already exists — load its content (source of truth), update LS cache
-        _reviews = JSON.parse(await f.text());
-        _lsSave();
+      var cached = _lsLoad();
+      var hasCache = cached.length > 0;
+
+      if (!isNew) {
+        // ── Open existing file ──────────────────────────────────────────
+        var fileData = f.size > 0 ? JSON.parse(await f.text()) : [];
+        if (hasCache && !silent) {
+          // Active session: ask merge or replace
+          var choice = await _showMergeDialog(h.name, cached.length, fileData.length);
+          if (choice === 'cancel') return false;
+          if (choice === 'merge') {
+            // Merge: union by (artifact+user+date) to avoid duplicates
+            var seen = new Set(fileData.map(function(r) { return r.artifact+'|'+r.user+'|'+r.date; }));
+            cached.forEach(function(r) {
+              if (!seen.has(r.artifact+'|'+r.user+'|'+r.date)) fileData.push(r);
+            });
+            _reviews = fileData;
+          } else {
+            // Replace: use file as source of truth, discard LS
+            _reviews = fileData;
+          }
+        } else {
+          // Fresh session: just load the file
+          _reviews = fileData;
+        }
       } else {
-        // New empty file — initialise it from localStorage content
-        _reviews = _lsLoad();
-        await (async function() {
-          var w = await h.createWritable();
-          await w.write(JSON.stringify(_reviews, null, 2));
-          await w.close();
-        })();
+        // ── New file ────────────────────────────────────────────────────
+        if (hasCache) {
+          // Active session: ask save LS data or start fresh
+          var choice2 = await _showSaveDialog(cached.length);
+          if (choice2 === 'cancel') return false;
+          _reviews = (choice2 === 'save') ? cached : [];
+        } else {
+          // Fresh session: start with empty file
+          _reviews = [];
+        }
+        var w = await h.createWritable();
+        await w.write(JSON.stringify(_reviews, null, 2));
+        await w.close();
       }
+
+      _lsSave();
       _handle = h; _idbPut(h); return true;
     } catch(e) { return false; }
+  }
+
+  /* ── Merge dialog (open file + active session) ──────────────────── */
+  function _showMergeDialog(fname, nCache, nFile) {
+    return new Promise(function(resolve) {
+      var overlay = document.createElement('div');
+      overlay.id = 'rv-picker-overlay';
+      overlay.innerHTML =
+        '<div id="rv-picker-box">' +
+          '<h3>\uD83D\uDCC2 Existing session data</h3>' +
+          '<p>You have <b>' + nCache + '</b> review(s) in this session.<br>' +
+          'The file <b>' + fname + '</b> contains <b>' + nFile + '</b> review(s).</p>' +
+          '<button class="rv-picker-btn" id="rv-pick-merge">' +
+            '\uD83D\uDD00\u00a0Merge \u2014 combine both sets' +
+          '</button>' +
+          '<button class="rv-picker-btn" id="rv-pick-replace">' +
+            '\uD83D\uDCC4\u00a0Replace \u2014 use file only, discard session data' +
+          '</button>' +
+          '<button class="rv-picker-cancel" id="rv-pick-cancel">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      function done(c) { overlay.remove(); resolve(c); }
+      document.getElementById('rv-pick-merge').onclick   = function() { done('merge'); };
+      document.getElementById('rv-pick-replace').onclick = function() { done('replace'); };
+      document.getElementById('rv-pick-cancel').onclick  = function() { done('cancel'); };
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) done('cancel'); });
+    });
+  }
+
+  /* ── Save dialog (new file + active session) ────────────────────── */
+  function _showSaveDialog(nCache) {
+    return new Promise(function(resolve) {
+      var overlay = document.createElement('div');
+      overlay.id = 'rv-picker-overlay';
+      overlay.innerHTML =
+        '<div id="rv-picker-box">' +
+          '<h3>\uD83C\uDD95 New file \u2014 existing session data</h3>' +
+          '<p>You have <b>' + nCache + '</b> review(s) in this session.</p>' +
+          '<button class="rv-picker-btn" id="rv-pick-save">' +
+            '\uD83D\uDCBE\u00a0Save session data into the new file' +
+          '</button>' +
+          '<button class="rv-picker-btn" id="rv-pick-discard">' +
+            '\uD83D\uDDD1\uFE0F\u00a0Discard session data \u2014 start fresh' +
+          '</button>' +
+          '<button class="rv-picker-cancel" id="rv-pick-cancel">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      function done(c) { overlay.remove(); resolve(c); }
+      document.getElementById('rv-pick-save').onclick    = function() { done('save'); };
+      document.getElementById('rv-pick-discard').onclick = function() { done('discard'); };
+      document.getElementById('rv-pick-cancel').onclick  = function() { done('cancel'); };
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) done('cancel'); });
+    });
   }
 
   /* ── Connect button ─────────────────────────────────────────────── */
@@ -1076,33 +1238,60 @@ class MHTMLCleaner:
         });
       }
     } catch(e) { return; /* user cancelled picker */ }
-    var ok = await _fileConnect(h);
+    var ok = await _fileConnect(h, choice === 'new');
     if (ok) { _setConnected(true, h.name); _renderAll(); }
   };
 
   /* ── Render ─────────────────────────────────────────────────────── */
-  function _render(aid) {
+  // aid   = DOM slug (used for rv-{aid} wrapper id)
+  // label = JSON artifact value (§-prefixed for headings, same as aid for artifacts)
+  function _render(aid, label) {
+    if (!label) label = aid;
     var wrap = document.getElementById('rv-' + aid);
     if (!wrap) return;
-    var mine = _reviews.filter(function(r) { return r.artifact === aid; });
+    var mine = _reviews.filter(function(r) { return r.artifact === label; });
     if (!mine.length) { wrap.style.display = 'none'; return; }
     wrap.style.display = 'flex';
     var en = wrap.querySelector('.review-entries');
     en.innerHTML = '';
-    mine.forEach(function(r) {
+    mine.forEach(function(r, idx) {
       var row = document.createElement('div');
       row.className = 'review-entry review-' + r.context.toLowerCase();
+
+      // Action icons (edit, change status, delete) — shown only when connected
+      var acts = document.createElement('span'); acts.className = 'review-actions';
+      if (_connected) {
+        var btnEdit = document.createElement('button');
+        btnEdit.className = 'rv-act-btn'; btnEdit.title = 'Edit text';
+        btnEdit.textContent = '\u270F\uFE0F';
+        btnEdit.addEventListener('click', function(e) { e.stopPropagation(); _editReview(aid, label, r); });
+
+        var btnStatus = document.createElement('button');
+        btnStatus.className = 'rv-act-btn'; btnStatus.title = 'Change status';
+        btnStatus.textContent = '\uD83D\uDD04';
+        btnStatus.addEventListener('click', function(e) { e.stopPropagation(); _changeStatus(aid, label, r); });
+
+        var btnDel = document.createElement('button');
+        btnDel.className = 'rv-act-btn rv-act-del'; btnDel.title = 'Delete this review';
+        btnDel.textContent = '\u274C';
+        btnDel.addEventListener('click', function(e) { e.stopPropagation(); _deleteReview(aid, label, r); });
+
+        acts.appendChild(btnEdit); acts.appendChild(btnStatus); acts.appendChild(btnDel);
+      }
+
       var bd = document.createElement('span'); bd.className = 'review-badge'; bd.textContent = r.context;
       var mt = document.createElement('span'); mt.className = 'review-meta';
       mt.textContent = r.user + ' \u2014 ' + r.date;
       var tx = document.createElement('span'); tx.className = 'review-text'; tx.textContent = r.text;
-      row.appendChild(bd); row.appendChild(mt); row.appendChild(tx);
+      row.appendChild(acts); row.appendChild(bd); row.appendChild(mt); row.appendChild(tx);
       en.appendChild(row);
     });
   }
   function _renderAll() {
     document.querySelectorAll('[artifact-type][artifact]').forEach(function(d) {
-      var a = d.getAttribute('artifact'); if (a) _render(a);
+      var a = d.getAttribute('artifact');
+      var l = d.getAttribute('artifact-label') || a;
+      if (a) _render(a, l);
     });
   }
 
@@ -1139,14 +1328,14 @@ class MHTMLCleaner:
     });
   }
 
-  function _showMenu(x, y, aid) {
+  function _showMenu(x, y, aid, label) {
     _menu.innerHTML = '';
-    [['🟣','Operational'],['🔶','Significant'],['🔴','Major'],['🟠','Minor'],['🟢','Typo'],['🔵','Comment']].forEach(function(p) {
+    REVIEW_TAGS.forEach(function(p) {
       var it = document.createElement('div');
       if (_connected) {
         it.className = 'review-menu-item';
         it.addEventListener('click', function(e) {
-          e.stopPropagation(); _menu.style.display = 'none'; _add(aid, p[1]);
+          e.stopPropagation(); _menu.style.display = 'none'; _add(aid, label, p[1]);
         });
       } else {
         it.className = 'review-menu-item review-menu-disabled';
@@ -1157,6 +1346,21 @@ class MHTMLCleaner:
 
     var sep = document.createElement('div'); sep.className = 'review-menu-sep';
     _menu.appendChild(sep);
+
+    // Remove all (only shown when reviews exist for this artifact)
+    var mine = _reviews.filter(function(r) { return r.artifact === label; });
+    if (mine.length > 0) {
+      var ra = document.createElement('div');
+      ra.className = _connected ? 'review-menu-item review-menu-remove' : 'review-menu-item review-menu-disabled';
+      ra.textContent = '\uD83D\uDDD1\uFE0F\u00a0Remove all reviews (' + mine.length + ')';
+      if (_connected) ra.addEventListener('click', function(e) {
+        e.stopPropagation(); _menu.style.display = 'none'; _removeAll(aid, label);
+      });
+      _menu.appendChild(ra);
+
+      var sep3 = document.createElement('div'); sep3.className = 'review-menu-sep';
+      _menu.appendChild(sep3);
+    }
 
     if (!_connected) {
       var warn = document.createElement('div');
@@ -1189,33 +1393,81 @@ class MHTMLCleaner:
   }
 
   /* ── Add review ─────────────────────────────────────────────────── */
-  async function _add(aid, ctx) {
+  async function _add(aid, label, ctx) {
     var u = getUser();
     if (!u) {
       u = window.prompt('Enter your user name:', '');
       if (!u || !u.trim()) return;
       setUser(u = u.trim());
     }
-    var txt = window.prompt('[' + ctx + '] ' + aid + ':', '');
+    var txt = window.prompt('[' + ctx + '] ' + label + ':', '');
     if (txt === null || !txt.trim()) return;
     var now = new Date();
     var pad = function(n) { return String(n).padStart(2, '0'); };
     var d = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
           + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
-    _reviews.push({ user: u, artifact: aid, context: ctx, text: txt.trim(), date: d });
-    _lsSave();          // fast local cache
-    await _fileSave();  // persist to disk
-    _render(aid);
+    _reviews.push({ user: u, artifact: label, context: ctx, text: txt.trim(), date: d });
+    _lsSave();
+    await _fileSave();
+    _render(aid, label);
+  }
+
+  /* ── Remove all reviews for an artifact ────────────────────────── */
+  async function _removeAll(aid, label) {
+    var n = _reviews.filter(function(r) { return r.artifact === label; }).length;
+    if (!window.confirm('Remove all ' + n + ' review(s) for ' + label + '?')) return;
+    _reviews = _reviews.filter(function(r) { return r.artifact !== label; });
+    _lsSave();
+    await _fileSave();
+    _render(aid, label);
+  }
+
+  /* ── Per-row actions: delete, edit, change status ───────────────── */
+  async function _deleteReview(aid, label, r) {
+    var idx = _reviews.indexOf(r);
+    if (idx === -1) return;
+    _reviews.splice(idx, 1);
+    _lsSave();
+    await _fileSave();
+    _render(aid, label);
+  }
+
+  async function _editReview(aid, label, r) {
+    var txt = window.prompt('Edit review text:', r.text);
+    if (txt === null || !txt.trim()) return;
+    r.text = txt.trim();
+    _lsSave();
+    await _fileSave();
+    _render(aid, label);
+  }
+
+  async function _changeStatus(aid, label, r) {
+    var tagNames = REVIEW_TAGS.map(function(p) { return p[1]; });
+    var current  = tagNames.indexOf(r.context);
+    var list     = REVIEW_TAGS.map(function(p, i) {
+      return (i === current ? '> ' : '  ') + p[0] + ' ' + p[1];
+    }).join('\n');
+    var input = window.prompt('Choose new status (enter name):\n' + list, r.context);
+    if (!input) return;
+    var match = REVIEW_TAGS.find(function(p) {
+      return p[1].toLowerCase() === input.trim().toLowerCase();
+    });
+    if (!match) { alert('Unknown status: ' + input.trim()); return; }
+    r.context = match[1];
+    _lsSave();
+    await _fileSave();
+    _render(aid, label);
   }
 
   /* ── Attach context menus ───────────────────────────────────────── */
   function _attach() {
     document.querySelectorAll('[artifact-type][artifact]').forEach(function(div) {
       if (!div.getAttribute('artifact-type')) return;
-      var aid = div.getAttribute('artifact'); if (!aid) return;
+      var aid   = div.getAttribute('artifact'); if (!aid) return;
+      var label = div.getAttribute('artifact-label') || aid;  // §-prefixed for headings
       div.addEventListener('contextmenu', function(e) {
         e.preventDefault(); e.stopPropagation();
-        _showMenu(e.clientX, e.clientY, aid);
+        _showMenu(e.clientX, e.clientY, aid, label);
       });
     });
   }
@@ -1230,7 +1482,7 @@ class MHTMLCleaner:
     // Try auto-reconnect via stored IndexedDB handle
     _idbGet(async function(h) {
       if (!h) return;
-      var ok = await _fileConnect(h);   // reads file, overwrites LS cache
+      var ok = await _fileConnect(h, false);   // auto-reconnect: always open existing
       if (ok) { _setConnected(true, h.name); _renderAll(); }
     });
   }
@@ -1250,6 +1502,13 @@ class MHTMLCleaner:
             html_content = html_content[:pos] + '\n' + connect_bar + html_content[pos:]
         else:
             html_content = connect_bar + html_content
+
+        # Build REVIEW_TAGS JS array based on extra_tags flag
+        if extra_tags:
+            tags_js = "[['🟣','Operational'],['🔶','Significant'],['🔴','Major'],['🟠','Minor'],['🟢','Typo'],['🔵','Comment']]"
+        else:
+            tags_js = "[['🔴','Major'],['🟠','Minor'],['🔵','Comment']]"
+        css_js = css_js.replace('REVIEW_TAGS_PLACEHOLDER', tags_js, 1)
 
         # Inject CSS + JS before </body>
         if '</body>' in html_content:
@@ -1391,7 +1650,8 @@ class MHTMLCleaner:
             if self.include_hovering:
                 html_cleaned = self._inject_hovering(html_cleaned)
             if self.include_review:
-                html_cleaned = self._inject_review_system(html_cleaned)
+                html_cleaned = self._tag_headings_for_review(html_cleaned)
+                html_cleaned = self._inject_review_system(html_cleaned, self.review_extra_tags)
 
             if self.verbose:
                 print("  🔄 MHTML → HTML")
@@ -1431,6 +1691,8 @@ def main():
                         help='Inject JS hover tooltips showing artifact definitions')
     parser.add_argument('-R', '--include-review', action='store_true',
                         help='Inject review annotation system (right-click on artifacts)')
+    parser.add_argument('--review-extra-tags', action='store_true',
+                        help='Add Operational, Significant and Typo review types (requires -R)')
     parser.add_argument('-t', '--remove-traceability', action='store_true',
                         help='Remove traceability nav-pills blocks entirely')
     parser.add_argument('--version', action='version', version=f'mhtml-cleaner {__version__}')
@@ -1465,6 +1727,7 @@ def main():
         remove_sidenav=args.remove_sidenav,
         include_hovering=args.include_hovering,
         include_review=args.include_review,
+        review_extra_tags=args.review_extra_tags,
         remove_traceability=args.remove_traceability,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
