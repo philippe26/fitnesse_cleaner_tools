@@ -7,6 +7,10 @@ __pycache__/
 *.html
 *.csv
 
-*# Input files
+# Input files
 *.mhtml
 *.xls*
+
+# Ignore releases binaries
+Releases/*
+

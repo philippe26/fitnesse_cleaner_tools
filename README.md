@@ -1,11 +1,10 @@
 # MHTML Cleaner
 
-Two scripts for converting MHTML files to standalone HTML and validating the output.
-
 | Script | Description |
 |--------|-------------|
 | `mhtml-cleaner.py` | Converts an MHTML file to a self-contained HTML file |
 | `test-html-validator.py` | Validates an HTML file produced by the cleaner |
+| `SyncReviewExcel.py` | Imports/exports review JSON data into/from Excel peer-review forms |
 
 ---
 
@@ -570,3 +569,148 @@ Result: 13 passed / 0 failed
 
 ✅ All tests passed — file is ready.
 ```
+
+---
+
+---
+
+# SyncReviewExcel.py
+
+Synchronises review data between the JSON file produced by `mhtml-cleaner -R` and Excel peer-review forms (`.xls`).
+
+## Requirements
+
+- Python 3.9+
+- `xlrd`, `xlwt`, `xlutils` — install with:
+
+```bash
+pip install xlrd xlwt xlutils
+```
+
+---
+
+## Expected Excel structure
+
+Each Excel file must be named `<PREFIX>_<Alias>.xls` (e.g. `PIDS_Yves.xls`).
+
+The sheet `Defect_Description_Sheet` must contain:
+
+| Cell | Field |
+|------|-------|
+| F2 | `reviewer_full_name` — full name of the reviewer |
+| F3 | `nb_items` — number of defects (updated on import) |
+| F4 | `review_duration` — formatted `HH:MM` (updated on import) |
+| F5 | `return_date` — formatted `DD/MM/YYYY` (updated on import) |
+| Row 10+ col A | N° (auto-incremented integer) |
+| Row 10+ col B | Localization → JSON `artifact` |
+| Row 10+ col C | Date annotation (written by this script) |
+| Row 10+ col D | Defect Description → JSON `text` |
+| Row 10+ col F | Severity → JSON `context` |
+
+Rows where Localization is `Req :` (placeholder) and both Description and Severity are empty are treated as blank and ignored.
+
+---
+
+## Usage
+
+```bash
+python3 SyncReviewExcel.py {import|export} reviews.json [options]
+```
+
+### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--dir DIR` | | JSON folder | Directory containing XLS files |
+| `--map user:Full Name` | | auto | Manual user→reviewer mapping (repeatable) |
+| `--import-mode MODE` | | `merge` | Import strategy: `overwrite`, `append`, `merge` |
+| `--verbose` | `-v` | off | Print per-row details |
+| `--proceed` | `-y` | off | Skip confirmation prompt |
+| `--version` | | | Show version and exit |
+
+---
+
+## User → reviewer matching
+
+The script auto-matches JSON `user` values to Excel reviewers by looking for `user` as a case-insensitive substring of `reviewer_full_name` (F2).
+
+- `"Yves"` → `"Yves Finaz"` ✅
+- `"yves"` → `"Yves Finaz"` ✅ (case-insensitive)
+- `"a"` → `"Yves Finaz"` + `"Andrea M."` ❌ (ambiguous — use `--map`)
+
+Use `--map user:Full Name` to override or force an association:
+
+```bash
+python3 SyncReviewExcel.py import reviews.json --map "nono:Norbert Hejakouja"
+```
+
+---
+
+## Import modes
+
+### `merge` (default)
+
+Compares each JSON entry with existing rows by key `(artifact, text, context)`:
+
+- **New** entry → appended after the last data row
+- **Existing** entry with a different date → date in column C is updated
+- **Unchanged** entry → skipped
+
+```
+merge: 2 new, 1 updated, 4 unchanged
+```
+
+### `append`
+
+Appends JSON entries that are not already present (same key check). Existing rows are never modified.
+
+```
+append: 2 new, 4 already present
+```
+
+### `overwrite`
+
+Clears all data rows (from row 10) before writing all JSON entries.
+
+```
+overwrite: 6 row(s) written
+```
+
+---
+
+## Export
+
+Reads all valid XLS files, exports rows that have at least a Description or Severity value. `user` is set to `reviewer_full_name` (F2).
+
+```bash
+python3 SyncReviewExcel.py export reviews.json
+python3 SyncReviewExcel.py export reviews.json --dir /path/to/xlsfiles -v
+```
+
+---
+
+## Examples
+
+```bash
+# Import with default merge, ask confirmation
+python3 SyncReviewExcel.py import reviews.json
+
+# Import with overwrite, skip confirmation, verbose
+python3 SyncReviewExcel.py import reviews.json --import-mode overwrite -y -v
+
+# Import with manual mapping
+python3 SyncReviewExcel.py import reviews.json --map "phil:Philippe Grossi"
+
+# Export all XLS to JSON
+python3 SyncReviewExcel.py export reviews.json --dir ./xlsfiles
+```
+
+---
+
+## Summary cells updated on import
+
+| Cell | Value | Format |
+|------|-------|--------|
+| F3 | Total number of rows in the table | integer |
+| F4 | Duration: latest − earliest review date for this user | `HH:MM` |
+| F5 | Return date: date of the most recent review | `DD/MM/YYYY` |

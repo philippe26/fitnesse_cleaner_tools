@@ -1,6 +1,55 @@
 # CHANGELOG - mhtml-cleaner.py
 ---
 
+## v2.8.0 — 2026-04-02
+
+### Fix: export date fallback from XLS file
+When a row's date annotation (column C) is empty on export, the script now falls back to the file's `return_date` value (cell F5) as the date for that JSON entry. A `(fallback date)` marker is shown in verbose mode.
+
+### New: standalone executables in `Releases/`
+
+| Platform | File | Notes |
+|----------|------|-------|
+| Linux x86-64 | `Releases/Linux/mhtml-cleaner` | Built with PyInstaller, no Python required |
+| Linux x86-64 | `Releases/Linux/SyncReviewExcel` | Built with PyInstaller, no Python required |
+| Windows x86-64 | `Releases/windows/mhtml-cleaner.exe` | PE32+ console EXE, cross-compiled via Wine+PyInstaller |
+| Windows x86-64 | `Releases/windows/SyncReviewExcel.exe` | PE32+ console EXE, cross-compiled via Wine+PyInstaller |
+
+Usage on Windows (command prompt or PowerShell):
+```
+mhtml-cleaner.exe input.mhtml -R -A
+SyncReviewExcel.exe import reviews.json --import-mode merge -v
+```
+
+---
+
+### New: `SyncReviewExcel.py` — Excel ↔ JSON synchronisation script
+New standalone script (replaces `review-xls-sync.py`) for importing and exporting review data between the JSON file produced by `mhtml-cleaner -R` and Excel peer-review forms (`.xls`).
+
+#### Import modes (`--import-mode`)
+| Mode | Behaviour |
+|------|-----------|
+| `merge` (default) | New entries appended; existing entries with changed date updated; unchanged skipped |
+| `append` | New entries appended; existing entries (same artifact+text+context) skipped |
+| `overwrite` | All data rows cleared, then JSON entries written from scratch |
+
+Verbose reporting (`-v`) prints each row action (➕ new / 🔄 updated / ⏭ unchanged / 🗑️ cleared).
+
+#### Export
+Reads all valid XLS files, exports rows with at least Description or Severity. Empty placeholder rows (`Req :` with no Description/Severity) are skipped.
+
+#### Summary cells updated on import
+- **F3** `nb_items` — total rows in table
+- **F4** `review_duration` — formatted `HH:MM` (max date − min date for this user)
+- **F5** `return_date` — formatted `DD/MM/YYYY` (most recent review date)
+
+#### Other features
+- Auto-match JSON `user` → `reviewer_full_name` (substring, case-insensitive); `--map user:Full Name` to override
+- `-y` / `--proceed` to skip confirmation prompt
+- `--dir` to specify XLS folder independently of JSON file location
+
+---
+
 ## v2.7.2 — 2026-04-02
 
 ### Fix: "Change status" prompt showed nothing (REVIEW_TAGS not defined)
