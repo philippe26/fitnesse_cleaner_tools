@@ -576,20 +576,34 @@ Result: 13 passed / 0 failed
 
 # SyncReviewExcel.py
 
-Synchronises review data between the JSON file produced by `mhtml-cleaner -R` and Excel peer-review forms (`.xls`).
+Synchronises review data between the JSON file produced by `mhtml-cleaner -R` and Excel peer-review forms (`.xls`, `.xlsx`, `.xlsm`).
 
 ## Requirements
 
 - Python 3.9+
-- `xlrd`, `xlwt`, `xlutils` — install with:
+- `xlrd`, `xlwt`, `xlutils`, `openpyxl` — install with:
 
 ```bash
-pip install xlrd xlwt xlutils
+pip install xlrd xlwt xlutils openpyxl
 ```
 
 ---
 
-## Expected Excel structure
+## Import types
+
+SyncReviewExcel supports two import formats, selected with `--import-type` / `-T`:
+
+### `single` (default)
+
+One `.xls` file per reviewer. Each JSON `user` is matched to a reviewer's XLS file and reviews are written into the `Defect_Description_Sheet` sheet.
+
+### `merged`
+
+All reviews from all users are imported into a single `.xlsx` or `.xlsm` file, in the `Remarks` sheet starting at row 15. New rows are **inserted** (not appended) to preserve any fixed content (watermarks, copyright) that may exist below the data zone.
+
+---
+
+## Expected Excel structure — `single` mode
 
 Each Excel file must be named `<PREFIX>_<Alias>.xls` (e.g. `PIDS_Yvon.xls`).
 
@@ -611,6 +625,23 @@ Rows where Localization is `Req :` (placeholder) and both Description and Severi
 
 ---
 
+## Expected Excel structure — `merged` mode
+
+The target file (`.xlsx` or `.xlsm`) must contain a sheet named `Remarks`. Reviews are inserted starting at row 15:
+
+| Column | Field |
+|--------|-------|
+| A | Author (`user`) |
+| B | Auto-incremented N° |
+| D | Artifact |
+| E | Text |
+| F | Context (`major`, `minor`, `comment`, …) |
+| G | Status (`Accept`, `Duplicate`, `Reject`, `Discuss`) — left blank if not set in JSON |
+
+Rows are **inserted** at the first empty writable row after the last data row, pushing fixed content (copyright, watermarks, merged cells) downward. Cell formatting from the last existing data row is copied to all inserted rows.
+
+---
+
 ## Usage
 
 ```bash
@@ -621,20 +652,22 @@ python3 SyncReviewExcel.py {import|export} reviews.json [options]
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--dir DIR` | | JSON folder | Directory containing XLS files |
-| `--map user:Full Name` | | auto | Manual user→reviewer mapping (repeatable) |
-| `--import-mode MODE` | | `merge` | Import strategy: `overwrite`, `append`, `merge` |
+| `--import-type {single,merged}` | `-T` | `single` | Import format |
+| `--xlsx FILE` | `-x` | auto-detect | Target `.xlsx`/`.xlsm` file (merged mode only) |
+| `--dir DIR` | | JSON folder | Directory containing XLS files (single mode) |
+| `--map user:Full Name` | | auto | Manual user→reviewer mapping, repeatable (single mode) |
+| `--import-mode {merge,append,overwrite}` | `-M` | `merge` | Import strategy (`overwrite` not available for merged) |
 | `--verbose` | `-v` | off | Print per-row details |
 | `--proceed` | `-y` | off | Skip confirmation prompt |
 | `--version` | | | Show version and exit |
 
 ---
 
-## User → reviewer matching
+## User → reviewer matching (single mode)
 
 The script auto-matches JSON `user` values to Excel reviewers by looking for `user` as a case-insensitive substring of `reviewer_full_name` (F2).
 
-- `Yvon"` → `"Yvon Lanouz"` ✅
+- `"Yvon"` → `"Yvon Lanouz"` ✅
 - `"yvon"` → `"Yvon Lanouz"` ✅ (case-insensitive)
 - `"a"` → `"Yvon Lanouz"` + `"Andrea M."` ❌ (ambiguous — use `--map`)
 
@@ -648,39 +681,49 @@ python3 SyncReviewExcel.py import reviews.json --map "nono:Norbert Hejakouja"
 
 ## Import modes
 
-### `merge` (default)
+### `merge` (default) — both `single` and `merged`
 
-Compares each JSON entry with existing rows by key `(artifact, text, context)`:
+Compares each JSON entry with existing rows using a composite key:
 
-- **New** entry → appended after the last data row
-- **Existing** entry with a different date → date in column C is updated
-- **Unchanged** entry → skipped
+- `single`: key = `(artifact, text, context)`
+- `merged`: key = `(user, artifact, text, context)`
 
-```
-merge: 2 new, 1 updated, 4 unchanged
-```
+Behaviour:
 
-### `append`
-
-Appends JSON entries that are not already present (same key check). Existing rows are never modified.
+- **New** entry → inserted/appended after the last data row
+- **Existing** unchanged entry → skipped
+- `single` only: **Existing** entry with a different date → date in column C updated
 
 ```
-append: 2 new, 4 already present
+merge: 2 new, 1 updated, 4 unchanged    (single)
+merge: 54 new, 0 already present        (merged)
 ```
 
-### `overwrite`
+### `append` — both `single` and `merged`
 
-Clears all data rows (from row 10) before writing all JSON entries.
+Inserts/appends all JSON entries regardless of duplicates. A warning is shown listing how many entries were already present.
 
 ```
-overwrite: 6 row(s) written
+append: 6 new, 4 already present
+```
+
+### `overwrite` — both `single` and `merged`
+
+Clears all data rows before writing all JSON entries from scratch.
+
+- `single`: clears from row 10 of `Defect_Description_Sheet`
+- `merged`: deletes all data rows from row 15 of `Remarks` (fixed content below is preserved and shifts back up)
+
+```
+overwrite: 6 row(s) written           (single)
+overwrite: deleted 56 row(s), 54 added (merged)
 ```
 
 ---
 
 ## Export
 
-Reads all valid XLS files, exports rows that have at least a Description or Severity value. `user` is set to `reviewer_full_name` (F2).
+Reads all valid `.xls` files in a directory, exports rows that have at least a Description or Severity value. `user` is set to `reviewer_full_name` (F2).
 
 ```bash
 python3 SyncReviewExcel.py export reviews.json
@@ -692,14 +735,20 @@ python3 SyncReviewExcel.py export reviews.json --dir /path/to/xlsfiles -v
 ## Examples
 
 ```bash
-# Import with default merge, ask confirmation
+# Single import with default merge
 python3 SyncReviewExcel.py import reviews.json
 
-# Import with overwrite, skip confirmation, verbose
-python3 SyncReviewExcel.py import reviews.json --import-mode overwrite -y -v
+# Single import — overwrite, skip confirmation, verbose
+python3 SyncReviewExcel.py import reviews.json -M overwrite -y -v
 
-# Import with manual mapping
+# Single import — manual user mapping
 python3 SyncReviewExcel.py import reviews.json --map "phil:Philippe Loubertin"
+
+# Merged import — auto-detect xlsx in same folder as JSON
+python3 SyncReviewExcel.py import reviews.json -T merged -y
+
+# Merged import — specify target file, append mode
+python3 SyncReviewExcel.py import reviews.json -T merged -x report.xlsm -M append -y
 
 # Export all XLS to JSON
 python3 SyncReviewExcel.py export reviews.json --dir ./xlsfiles
@@ -707,7 +756,7 @@ python3 SyncReviewExcel.py export reviews.json --dir ./xlsfiles
 
 ---
 
-## Summary cells updated on import
+## Summary cells updated on import (single mode)
 
 | Cell | Value | Format |
 |------|-------|--------|

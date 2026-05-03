@@ -1,6 +1,43 @@
 # CHANGELOG - mhtml-cleaner.py
 ---
 
+## v2.9.0 — 2026-05-03
+
+### All scripts aligned to v2.9.0
+`mhtml-cleaner.py`, `test-html-validator.py`, and `SyncReviewExcel.py` are now on the same version number.
+
+### New: `SyncReviewExcel.py` — `--import-type merged` (`-T merged`)
+
+New import mode that writes all reviews from all users into a single `.xlsx` or `.xlsm` file, targeting a sheet named `Remarks` starting at row 15.
+
+| Column | Field |
+|--------|-------|
+| A | Author (`user`) |
+| B | Auto-incremented N° |
+| D | Artifact |
+| E | Text |
+| F | Context |
+| G | Status (`Accept`, `Duplicate`, `Reject`, `Discuss`) — blank if not set |
+
+Key behaviours:
+- Rows are **inserted** (not appended) at the first writable empty row after existing data, pushing fixed content (watermarks, copyright, merged cells) downward
+- Cell formatting (font, fill, borders, alignment, row height) is copied from the last existing data row to all inserted rows
+- Merged cell ranges that overlap the insertion zone are unmerged before `insert_rows` and re-merged shifted down, preventing openpyxl from duplicating fusions onto inserted rows
+- Rows containing fixed content (formulas, legal text, merged cells in data columns) are detected and skipped when searching for the insertion point
+- Deduplication key: `(user, artifact, text, context)` — includes `user` unlike single mode
+- `--import-mode overwrite` deletes all data rows from row 15 downward before inserting, preserving fixed content (copyright, watermarks) that shifts back into place
+- Target file auto-detected if a single `.xlsx`/`.xlsm` exists in the JSON directory; `--xlsx`/`-x` to specify explicitly
+
+### New: `SyncReviewExcel.py` — `.xls` / `.xlsx` / `.xlsm` disambiguation
+- `--import-type single` scans for `.xls` files only (`.xlsx` excluded)
+- `--import-type merged` accepts `.xlsx` and `.xlsm` only; passing a `.xls` file produces a clear error with a suggestion to use `--import-type single`
+- openpyxl `UserWarning` messages about print-area defined names are silenced
+
+### Fix: `SyncReviewExcel.py` — first writable row detection in merged mode
+Row detection now uses 1-based openpyxl indexing throughout, fixing an off-by-one that caused new rows to be inserted at the wrong position. Rows with merged cells or fixed content in data columns are filtered by checking actual cell types and value lengths, preventing watermark/legal-text rows from being counted as data rows.
+
+---
+
 ## v2.8.0 — 2026-04-02
 
 ### Fix: export date fallback from XLS file

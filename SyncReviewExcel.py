@@ -7,14 +7,15 @@ Usage:
   python3 SyncReviewExcel.py export reviews.json [options]
 
 Dependencies:
-  pip install xlrd xlwt xlutils
+  pip install xlrd xlwt xlutils openpyxl
 """
 
-__version__ = '2.8.0'
+__version__ = '2.9.0'
 
 import argparse
 import json
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,12 @@ try:
 except ImportError:
     print("❌ Missing dependencies. Run: pip install xlrd xlwt xlutils", file=sys.stderr)
     sys.exit(1)
+
+try:
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    openpyxl = None
 
 # ── Sheet layout constants ────────────────────────────────────────────────────
 
@@ -40,6 +47,19 @@ ROW_NB_ITEMS = 2    # 0-based: F3 — nb_items
 ROW_DURATION = 3    # 0-based: F4 — review_duration  (HH:MM)
 ROW_RETDATE  = 4    # 0-based: F5 — return_date      (DD/MM/YYYY)
 COL_META     = 5    # F column for summary cells
+
+# ── Merged sheet layout constants (import-type merged) ────────────────────────
+
+MERGED_SHEET_NAME = 'Remarks'
+MERGED_DATA_ROW   = 14   # 0-based index: row 15 in Excel
+MERGED_COL_USER   = 0    # A — author (user)
+MERGED_COL_NO     = 1    # B — auto-increment
+MERGED_COL_ARTIFACT = 3  # D — artifact
+MERGED_COL_TEXT   = 4    # E — text
+MERGED_COL_CTX    = 5    # F — context
+MERGED_COL_STATUS = 6    # G — status
+
+MERGED_VALID_STATUSES = {'Accept', 'Duplicate', 'Reject', 'Discuss'}
 
 
 # ── Excel date helpers ────────────────────────────────────────────────────────
@@ -106,7 +126,7 @@ def _make_time_style(wb_out) -> xlwt.XFStyle:
 # ── File discovery ────────────────────────────────────────────────────────────
 
 def _find_xls_files(directory: str) -> list:
-    return sorted(Path(directory).glob('*.xls'))
+    return sorted(p for p in Path(directory).glob('*.xls') if p.suffix.lower() == '.xls')
 
 
 def _reviewer_alias(path: Path) -> str:
@@ -259,6 +279,297 @@ def _write_summary(ws_out, nb_added, all_dates, datemode, date_style, time_style
     duration = max(xl_dates) - min(xl_dates)
     ws_out.write(ROW_DURATION, COL_META, duration, time_style)
     ws_out.write(ROW_RETDATE,  COL_META, max(xl_dates), date_style)
+
+
+# ── IMPORT MERGED ─────────────────────────────────────────────────────────────
+
+def _merged_review_key(user: str, artifact: str, text: str, context: str) -> tuple:
+    return (user.strip().lower(), artifact.strip().lower(),
+            text.strip().lower(), context.strip().lower())
+
+
+def _is_merged_data_row(user: str, artifact: str) -> bool:
+    """A valid data row must have a short user name (col A) and/or an artifact (col D).
+    Rejects watermark/legal text rows that happen to have content in those columns."""
+    has_user     = bool(user) and len(user) <= 64
+    has_artifact = bool(artifact) and len(artifact) <= 128
+    return has_user or has_artifact
+
+
+def _read_merged_existing(ws) -> list:
+    """Return list of (row_1based, user, artifact, text, context, status) for data rows."""
+    rows = []
+    for r in range(MERGED_DATA_ROW + 1, ws.max_row + 1):  # r is 1-based (openpyxl)
+        user     = str(ws.cell(r, MERGED_COL_USER   + 1).value or '').strip()
+        artifact = str(ws.cell(r, MERGED_COL_ARTIFACT  + 1).value or '').strip()
+        text     = str(ws.cell(r, MERGED_COL_TEXT   + 1).value or '').strip()
+        context  = str(ws.cell(r, MERGED_COL_CTX    + 1).value or '').strip()
+        status   = str(ws.cell(r, MERGED_COL_STATUS + 1).value or '').strip()
+        if _is_merged_data_row(user, artifact):
+            rows.append((r, user, artifact, text, context, status))
+    return rows
+
+
+def cmd_import_merged(args):
+    if openpyxl is None:
+        print("❌ openpyxl is required for --import-type merged. Run: pip install openpyxl",
+              file=sys.stderr)
+        sys.exit(1)
+
+    json_path = Path(args.json_file)
+    if not json_path.exists():
+        print(f"❌ JSON file not found: {json_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(json_path, encoding='utf-8') as f:
+        reviews = json.load(f)
+
+    if not isinstance(reviews, list) or not reviews:
+        print("❌ JSON file is empty or not an array.", file=sys.stderr)
+        sys.exit(1)
+
+    MERGED_EXCEL_EXTS = {'.xlsx', '.xlsm'}
+
+    # Resolve target xlsx/xlsm file
+    xlsx_path = Path(args.xlsx_file) if args.xlsx_file else None
+    if xlsx_path is None:
+        candidates = [
+            p for p in json_path.parent.iterdir()
+            if p.suffix.lower() in MERGED_EXCEL_EXTS
+        ]
+        if len(candidates) == 1:
+            xlsx_path = candidates[0]
+        elif len(candidates) == 0:
+            print("❌ No .xlsx/.xlsm file found. Specify one with --xlsx.", file=sys.stderr)
+            sys.exit(1)
+        else:
+            names = ', '.join(p.name for p in sorted(candidates))
+            print(f"❌ Multiple Excel files found ({names}). Specify one with --xlsx.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    if not xlsx_path.exists():
+        print(f"❌ Excel file not found: {xlsx_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if xlsx_path.suffix.lower() not in MERGED_EXCEL_EXTS:
+        print(f"❌ --import-type merged requires a .xlsx or .xlsm file, got: {xlsx_path.name}\n"
+              f"   (Use --import-type single for .xls files)", file=sys.stderr)
+        sys.exit(1)
+
+    mode = args.import_mode  # overwrite | merge | append
+
+    print(f"\n📂 Excel file : {xlsx_path}")
+    print(f"📋 JSON file  : {json_path}  ({len(reviews)} entries)")
+    print(f"⚙️  Mode       : merged / {mode}")
+    print()
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
+        wb = openpyxl.load_workbook(str(xlsx_path), keep_vba=xlsx_path.suffix.lower() == '.xlsm')
+    if MERGED_SHEET_NAME not in wb.sheetnames:
+        print(f"❌ Sheet '{MERGED_SHEET_NAME}' not found in {xlsx_path.name}\n"
+              f"   Expected sheet name: '{MERGED_SHEET_NAME}'  (available: {wb.sheetnames})",
+              file=sys.stderr)
+        sys.exit(1)
+
+    ws = wb[MERGED_SHEET_NAME]
+
+    if mode == 'overwrite':
+        # Clear content of all data rows (keep formatting, merges, conditional formatting)
+        existing_before = _read_merged_existing(ws)
+        if existing_before:
+            first_data = MERGED_DATA_ROW + 1   # row 15 (1-based)
+            last_data  = max(r for r, *_ in existing_before)
+            n_cleared  = 0
+            for r in range(first_data, last_data + 1):
+                for c in range(1, ws.max_column + 1):
+                    from openpyxl.cell.cell import MergedCell
+                    cell = ws.cell(r, c)
+                    if not isinstance(cell, MergedCell):
+                        cell.value = None
+                n_cleared += 1
+            print(f"  🗑️  overwrite: cleared {n_cleared} row(s) (rows {first_data}–{last_data})")
+        else:
+            print("  ℹ️  overwrite: no existing data rows to clear")
+        existing  = []   # sheet is now empty from row 15 onward
+        to_write  = reviews
+    else:
+        existing = _read_merged_existing(ws)
+        exist_keys = {
+            _merged_review_key(u, a, t, c)
+            for _, u, a, t, c, _ in existing
+        }
+
+        new_reviews = []
+        already_present = []
+        for rv in reviews:
+            k = _merged_review_key(
+                rv.get('user', ''), rv.get('artifact', ''),
+                rv.get('text', ''), rv.get('context', '')
+            )
+            if k in exist_keys:
+                already_present.append(rv)
+            else:
+                new_reviews.append(rv)
+
+        if already_present:
+            print(f"  ⚠️  {len(already_present)} review(s) from the JSON are already present in "
+                  f"'{MERGED_SHEET_NAME}'.")
+            if mode == 'merge':
+                print("      Mode 'merge': these entries will NOT be re-added.")
+            else:
+                print("      Mode 'append': these entries WILL be added again (duplicates).")
+
+        if mode == 'merge':
+            to_write = new_reviews
+        else:  # append
+            to_write = reviews
+
+    if not to_write:
+        print("  ℹ️  Nothing to write — all entries already present.")
+        return
+
+    print(f"  ➕ {len(to_write)} row(s) to add to '{MERGED_SHEET_NAME}' (starting row 15)\n")
+
+    if not args.proceed:
+        confirm = input("▶ Proceed with import? [y/N] ").strip().lower()
+        if confirm != 'y':
+            print("Aborted.")
+            sys.exit(0)
+
+    from openpyxl.cell.cell import MergedCell
+
+    def _row_is_writable(ws, row: int) -> bool:
+        """All data columns must be normal (non-merged) cells and the row must be empty."""
+        for c in (MERGED_COL_USER, MERGED_COL_NO, MERGED_COL_ARTIFACT,
+                  MERGED_COL_TEXT, MERGED_COL_CTX, MERGED_COL_STATUS):
+            cell = ws.cell(row, c + 1)
+            if isinstance(cell, MergedCell):
+                return False
+            if cell.value is not None:
+                return False
+        return True
+
+    import re
+    import copy
+
+    first_data_row_1based = MERGED_DATA_ROW + 1   # row 15
+
+    if mode == 'overwrite':
+        # Rows were cleared in-place — write directly starting at row 15.
+        # If JSON has more entries than cleared rows, insert_rows the surplus.
+        write_start = first_data_row_1based
+        n_cleared   = len(existing_before) if existing_before else 0
+        n_surplus   = max(0, len(to_write) - n_cleared)
+        if n_surplus:
+            surplus_at = write_start + n_cleared
+            # Unmerge / re-merge around surplus insertion point
+            surplus_ranges = []
+            for mr in list(ws.merged_cells.ranges):
+                if mr.min_row >= surplus_at:
+                    surplus_ranges.append(str(mr))
+                    ws.unmerge_cells(str(mr))
+            ws.insert_rows(surplus_at, amount=n_surplus)
+            for mr_str in surplus_ranges:
+                def _shift_s(m):
+                    col, row = m.group(1), int(m.group(2))
+                    return f'{col}{row + n_surplus}'
+                ws.merge_cells(re.sub(r'([A-Z]+)(\d+)', _shift_s, mr_str))
+            # Copy style to surplus rows from the cleared row above
+            style_src = surplus_at - 1
+            n_cols = ws.max_column
+            ref_h  = ws.row_dimensions[style_src].height if style_src in ws.row_dimensions else None
+            for i in range(n_surplus):
+                r = surplus_at + i
+                ws.row_dimensions[r].height = ref_h
+                for c in range(1, n_cols + 1):
+                    src = ws.cell(style_src, c)
+                    dst = ws.cell(r, c)
+                    dst.font      = copy.copy(src.font)
+                    dst.fill      = copy.copy(src.fill)
+                    dst.border    = copy.copy(src.border)
+                    dst.alignment = copy.copy(src.alignment)
+                    dst.number_format = src.number_format
+        max_no     = 0
+        insert_at  = write_start   # reuse this name for the write loop below
+    else:
+        # merge / append: find insertion point after last data row
+        last_used = first_data_row_1based - 1
+        for row_1based, _, _, _, _, _ in existing:
+            if row_1based > last_used:
+                last_used = row_1based
+
+        insert_at = max(last_used + 1, first_data_row_1based)
+        while not _row_is_writable(ws, insert_at):
+            insert_at += 1
+
+        max_no = 0
+        for row_1based, _, _, _, _, _ in existing:
+            v = ws.cell(row_1based, MERGED_COL_NO + 1).value
+            if isinstance(v, (int, float)) and int(v) > max_no:
+                max_no = int(v)
+
+        style_ref_row = last_used if last_used >= first_data_row_1based else first_data_row_1based
+        n_cols = ws.max_column
+
+        # Unmerge ranges at/after insert_at, insert rows, re-merge shifted
+        n = len(to_write)
+        ranges_to_remerge = []
+        for mr in list(ws.merged_cells.ranges):
+            if mr.min_row >= insert_at:
+                ranges_to_remerge.append(str(mr))
+                ws.unmerge_cells(str(mr))
+
+        ws.insert_rows(insert_at, amount=n)
+
+        for mr_str in ranges_to_remerge:
+            def _shift(m):
+                col, row = m.group(1), int(m.group(2))
+                return f'{col}{row + n}'
+            ws.merge_cells(re.sub(r'([A-Z]+)(\d+)', _shift, mr_str))
+
+        def _copy_cell_style(src, dst):
+            dst.font      = copy.copy(src.font)
+            dst.fill      = copy.copy(src.fill)
+            dst.border    = copy.copy(src.border)
+            dst.alignment = copy.copy(src.alignment)
+            dst.number_format = src.number_format
+
+        ref_height = ws.row_dimensions[style_ref_row].height if style_ref_row in ws.row_dimensions else None
+        for i in range(n):
+            new_row = insert_at + i
+            ws.row_dimensions[new_row].height = ref_height
+            for c in range(1, n_cols + 1):
+                src = ws.cell(style_ref_row, c)
+                dst = ws.cell(new_row, c)
+                _copy_cell_style(src, dst)
+
+    n_added = 0
+    for rv in to_write:
+        user     = rv.get('user', '')
+        artifact = rv.get('artifact', '')
+        text     = rv.get('text', '')
+        context  = rv.get('context', '')
+        status   = rv.get('status', '')
+
+        row = insert_at + n_added
+        max_no += 1
+        ws.cell(row, MERGED_COL_USER     + 1).value = user
+        ws.cell(row, MERGED_COL_NO       + 1).value = max_no
+        ws.cell(row, MERGED_COL_ARTIFACT + 1).value = artifact
+        ws.cell(row, MERGED_COL_TEXT     + 1).value = text
+        ws.cell(row, MERGED_COL_CTX      + 1).value = context
+        if status and status in MERGED_VALID_STATUSES:
+            ws.cell(row, MERGED_COL_STATUS + 1).value = status
+
+        if args.verbose:
+            print(f"    ➕ row {row}: [{context}] {artifact[:40]} — {text[:50]}")
+
+        n_added += 1
+
+    wb.save(str(xlsx_path))
+    print(f"\n✅ Merged import complete: {n_added} row(s) added to '{xlsx_path.name}'")
 
 
 # ── IMPORT ────────────────────────────────────────────────────────────────────
@@ -522,13 +833,15 @@ def cmd_export(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='SyncReviewExcel — sync review JSON with Excel (.xls) peer-review files',
+        description='SyncReviewExcel — sync review JSON with Excel (.xls/.xlsx) peer-review files',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python3 SyncReviewExcel.py import reviews.json
   python3 SyncReviewExcel.py import reviews.json --import-mode overwrite -y
   python3 SyncReviewExcel.py import reviews.json --dir /path/to/xlsfiles --map "nono:Norbert H."
+  python3 SyncReviewExcel.py import reviews.json --import-type merged --xlsx merged_report.xlsx
+  python3 SyncReviewExcel.py import reviews.json --import-type merged --import-mode append -y
   python3 SyncReviewExcel.py export reviews.json -v
 """)
 
@@ -536,13 +849,20 @@ Examples:
                         help='Direction: import (JSON→XLS) or export (XLS→JSON)')
     parser.add_argument('json_file',
                         help='Path to the review JSON file')
+    parser.add_argument('--import-type','-T', choices=['single', 'merged'], default='single',
+                        help='Import format: single (one XLS per reviewer, default) | '
+                             'merged (all reviews into one XLSX Remarks sheet)')
+    parser.add_argument('--xlsx','-x', dest='xlsx_file', default=None,
+                        help='Target XLSX file for --import-type merged '
+                             '(auto-detected if only one .xlsx exists in the JSON directory)')
     parser.add_argument('--dir', default=None,
                         help='Directory containing XLS files (default: same folder as JSON file)')
     parser.add_argument('--map', action='append', metavar='user:Full Name',
                         help='Manual user→reviewer mapping, e.g. --map "phil:Philippe G." (repeatable)')
-    parser.add_argument('--import-mode', choices=['overwrite', 'append', 'merge'],
+    parser.add_argument('--import-mode', '-M', choices=['overwrite', 'append', 'merge'],
                         default='merge',
-                        help='Import strategy: overwrite | append | merge (default: merge)')
+                        help='Import strategy: overwrite | append | merge (default: merge). '
+                             'For --import-type merged only merge and append are used.')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Print details for each row processed')
     parser.add_argument('-y', '--proceed', action='store_true',
@@ -552,7 +872,10 @@ Examples:
     args = parser.parse_args()
 
     if args.action == 'import':
-        cmd_import(args)
+        if args.import_type == 'merged':
+            cmd_import_merged(args)
+        else:
+            cmd_import(args)
     else:
         cmd_export(args)
 

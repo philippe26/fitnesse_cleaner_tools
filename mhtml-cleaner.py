@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.7.2'
+__version__ = '2.9.0'
 
 import re
 import csv
