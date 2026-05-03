@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.9.0'
+__version__ = '2.9.1'
 
 import re
 import csv
@@ -13,12 +13,18 @@ import quopri
 from pathlib import Path
 from typing import Tuple
 
-# Optional: import validator if available in the same directory
+# Optional: import validator — works as plain script and inside a PyInstaller bundle
 try:
     import importlib.util as _ilu
+    import sys as _sys
+    if getattr(_sys, 'frozen', False):
+        # PyInstaller extracts data files to sys._MEIPASS
+        _base = Path(getattr(_sys, '_MEIPASS', Path(_sys.executable).parent))
+    else:
+        _base = Path(__file__).parent
     _spec = _ilu.spec_from_file_location(
         'html_validator',
-        Path(__file__).parent / 'test-html-validator.py'
+        _base / 'test-html-validator.py'
     )
     _mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
