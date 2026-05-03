@@ -591,7 +591,7 @@ pip install xlrd xlwt xlutils
 
 ## Expected Excel structure
 
-Each Excel file must be named `<PREFIX>_<Alias>.xls` (e.g. `PIDS_Yves.xls`).
+Each Excel file must be named `<PREFIX>_<Alias>.xls` (e.g. `PIDS_Yvon.xls`).
 
 The sheet `Defect_Description_Sheet` must contain:
 
@@ -634,9 +634,9 @@ python3 SyncReviewExcel.py {import|export} reviews.json [options]
 
 The script auto-matches JSON `user` values to Excel reviewers by looking for `user` as a case-insensitive substring of `reviewer_full_name` (F2).
 
-- `"Yves"` → `"Yves Finaz"` ✅
-- `"yves"` → `"Yves Finaz"` ✅ (case-insensitive)
-- `"a"` → `"Yves Finaz"` + `"Andrea M."` ❌ (ambiguous — use `--map`)
+- `Yvon"` → `"Yvon Lanouz"` ✅
+- `"yvon"` → `"Yvon Lanouz"` ✅ (case-insensitive)
+- `"a"` → `"Yvon Lanouz"` + `"Andrea M."` ❌ (ambiguous — use `--map`)
 
 Use `--map user:Full Name` to override or force an association:
 
@@ -699,7 +699,7 @@ python3 SyncReviewExcel.py import reviews.json
 python3 SyncReviewExcel.py import reviews.json --import-mode overwrite -y -v
 
 # Import with manual mapping
-python3 SyncReviewExcel.py import reviews.json --map "phil:Philippe Grossi"
+python3 SyncReviewExcel.py import reviews.json --map "phil:Philippe Loubertin"
 
 # Export all XLS to JSON
 python3 SyncReviewExcel.py export reviews.json --dir ./xlsfiles
