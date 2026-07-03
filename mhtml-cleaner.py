@@ -3,7 +3,7 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.10.0'
+__version__ = '2.11.0'
 
 import re
 import csv
@@ -52,7 +52,8 @@ class MHTMLCleaner:
                  review_extra_tags: bool = False,
                  remove_traceability: bool = False,
                  nda: str = None,
-                 nda_name: str = None):
+                 nda_name: str = None,
+                 remove_doc_control: bool = False):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -65,6 +66,7 @@ class MHTMLCleaner:
         self.include_review = include_review
         self.review_extra_tags = review_extra_tags
         self.remove_traceability = remove_traceability
+        self.remove_doc_control = remove_doc_control
         self.nda = nda
         self.nda_name = nda_name
 
@@ -452,6 +454,32 @@ class MHTMLCleaner:
 
         if self.verbose:
             print(f"  🗑️  Sidenav removed")
+
+        return html_content
+
+    def _remove_document_control(self, html_content: str) -> str:
+        """Removes the 'DOCUMENT CONTROL' heading and its signatory table
+        (names, functions, dates) from the PIDS front matter.
+
+        The heading and its table sit inside a wider div alongside
+        'CHANGE CONTROL', which must be left untouched, so only the
+        DOCUMENT CONTROL heading + the single <table> right after it are
+        stripped.
+        """
+        if not self.remove_doc_control:
+            return html_content
+
+        pattern = re.compile(
+            r'<h3[^>]*>\s*DOCUMENT CONTROL\s*</h3>.*?<table\b.*?</table>',
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        html_content, count = pattern.subn('', html_content)
+
+        if self.verbose:
+            if count:
+                print(f"  🗑️  Document Control section removed")
+            else:
+                print(f"  ⚠️  Document Control section not found")
 
         return html_content
 
@@ -1723,6 +1751,7 @@ class MHTMLCleaner:
             html_cleaned = self._transform_traceability_navpills(html_cleaned)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
+            html_cleaned = self._remove_document_control(html_cleaned)
             html_cleaned = self._inject_nda_footer(html_cleaned)
             if self.include_hovering:
                 html_cleaned = self._inject_hovering(html_cleaned)
@@ -1781,6 +1810,8 @@ def main():
                         help='NDA reference to add to the footer (enables NDA mention)')
     parser.add_argument('--nda-name', default=None,
                         help='Authorized supplier name to mention alongside --nda')
+    parser.add_argument('--remove-doc-control', action='store_true',
+                        help='Remove the DOCUMENT CONTROL section (names, functions, signatures)')
 
     args = parser.parse_args()
 
@@ -1815,6 +1846,7 @@ def main():
         remove_traceability=args.remove_traceability,
         nda=args.nda,
         nda_name=args.nda_name,
+        remove_doc_control=args.remove_doc_control,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
             if args.database_file and not args.database_file.endswith('.csv')

@@ -1,6 +1,11 @@
 # CHANGELOG - mhtml-cleaner.py
 ---
 
+## v2.11.0 — 2026-07-03
+
+### New: `--remove-doc-control` option
+Removes the `DOCUMENT CONTROL` heading and its signatory table (names, functions, dates, signatures) from the PIDS front matter, useful when sharing a document externally without disclosing internal reviewer names. The neighbouring `CHANGE CONTROL` section (revision history) is left untouched. Prints a non-blocking warning if no `DOCUMENT CONTROL` section is found.
+
 ## v2.10.0 — 2026-07-03
 
 ### New: `--nda` / `--nda-name` options

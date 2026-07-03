@@ -23,6 +23,8 @@ Converts an MHTML file into a standalone HTML file that displays correctly in a 
 - **Hover tooltips** _(optional)_: shows the full artifact definition when hovering over a link
 - **Optional button removal**: strips editing buttons from the original interface
 - **Optional sidebar removal**: strips the side navigation panel
+- **Optional Document Control removal**: strips the signatory table (names, functions, signatures) from the PIDS front matter
+- **NDA footer mention** _(optional)_: adds a confidentiality/ownership notice to the document footer
 - **HTML validation** _(optional)_: runs `test-html-validator.py` automatically on the output
 
 ---
@@ -53,12 +55,16 @@ python3 mhtml-cleaner.py input.mhtml [options]
 | `--include-review` | `-R` | off | Inject right-click review annotation system |
 | `--review-extra-tags` | | off | Add Operational, Significant and Typo types to the review menu (requires `-R`) |
 | `--remove-traceability` | `-t` | off | Remove traceability nav-pills blocks entirely |
+| `--remove-doc-control` | | off | Remove the DOCUMENT CONTROL section (names, functions, signatures) |
+| `--nda <ref>` | | off | NDA reference to add to the footer (enables the NDA mention) |
+| `--nda-name <name>` | | off | Authorized supplier name to mention alongside `--nda` |
 | `--all` | `-A` | off | Preset: enables `-b`, `-s`, `-v`, `-V`, `-H` |
 | `--verbose` | `-v` | off | Print details of each transformation |
 | `--validate` | `-V` | off | Run HTML validator on output after cleaning |
 | `--database-file <file>` | | off | Export artifact database to a CSV file (`.csv` added if omitted) |
 | `--version` | | | Show version number and exit |
 | `--help` | `-h` | | Show help |
+
 
 ---
 
@@ -183,6 +189,34 @@ When `--database-file` is specified, the database is exported as a CSV with colu
 When active, hovering over any `<a href="#Doc.Type.Object">` displays a floating panel with the full content of the target `<div>`. The panel is limited to 30% of the screen height; a `▼ truncated` indicator appears if the content is clipped.
 
 The native browser `title=` tooltip is suppressed when this option is active (both would show simultaneously otherwise). Without `-H`, the short description remains visible as a standard `title=` attribute.
+
+---
+
+## NDA footer mention (`--nda`)
+
+Adds a confidentiality notice to the document footer, for documents shared with an external party under a Non-Disclosure Agreement.
+
+```bash
+python3 mhtml-cleaner.py input.mhtml --nda "NDA-2026-0042"
+python3 mhtml-cleaner.py input.mhtml --nda "NDA-2026-0042" --nda-name "Acme Corp"
+```
+
+- `--nda <ref>` is required to enable the feature; it inserts a new row into the existing `<footer>` table (or creates a footer if none exists) stating the document is confidential under NDA `<ref>`
+- `--nda-name <name>` is optional (requires `--nda`) and names the authorized supplier the mention applies to
+- The NDA reference and supplier name are highlighted in bold red
+- The footer's `max-height` cap is lifted so the added row is not clipped; the footer stays pinned to the bottom of the viewport (`position: fixed`), and the page body gets extra bottom padding to compensate for the taller footer
+
+---
+
+## Document Control removal (`--remove-doc-control`)
+
+Strips the `DOCUMENT CONTROL` heading and its signatory table (names, functions, dates, signatures) from the PIDS front matter — useful when sharing a document externally without disclosing internal reviewer names.
+
+```bash
+python3 mhtml-cleaner.py input.mhtml --remove-doc-control
+```
+
+The neighbouring `CHANGE CONTROL` section (revision history) is left untouched. If no `DOCUMENT CONTROL` section is found, a warning is printed and the rest of the cleanup proceeds normally.
 
 ---
 
@@ -445,10 +479,12 @@ When clicking **CONNECT JSON REVIEW FILE**, the behaviour depends on whether the
 11. Remove sidebar _(if `-s` or `-A`)_
 12. Inject hover JS+CSS _(if `-H`)_
 13. Transform or remove traceability nav-pills _(always, or `-t` to remove)_
-14. Inject review annotation system _(if `-R`)_
-15. Remove `cid:` references (MHTML-specific)
-16. Save as plain HTML
-17. Run validator _(if `-V`)_
+14. Remove Document Control section _(if `--remove-doc-control`)_
+15. Add NDA footer mention _(if `--nda`)_
+16. Inject review annotation system _(if `-R`)_
+17. Remove `cid:` references (MHTML-specific)
+18. Save as plain HTML
+19. Run validator _(if `-V`)_
 
 ---
 

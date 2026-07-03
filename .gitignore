@@ -13,4 +13,6 @@ __pycache__/
 
 # Ignore releases binaries
 Releases/*
+scripts/.build
+scripts/.cache
 
