@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 /home/philippe/Electronics/Gael_World/Gael_cleaner/mhtml-cleaner.py no_footer.mhtml -o no_footer_out.html --nda \"NDA-XYZ\" -v)",
+      "Bash(pip install *)",
+      "Bash(python3 -c ' *)",
+      "Bash(cp PIDS_FAKE.html /tmp/fake_scroll_test.html)",
+      "Bash(cp PIDS_FAKE.html scroll_test_local.html)",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --enable-logging=stderr --v=1 --screenshot=shot1.png --window-size=1400,1400 --virtual-time-budget=3000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/scroll_test_local.html\")",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --screenshot=shot_full2.png --window-size=1400,5500 --virtual-time-budget=3000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/PIDS_FAKE.html\")",
+      "Bash(rm -f /home/philippe/shot1.png /home/philippe/shot_full2.png /home/philippe/Electronics/Gael_World/Gael_cleaner/scroll_test_local.html /tmp/fake_scroll_test.html /tmp/screenshot_bottom.js)",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --screenshot=shot_long.png --window-size=1400,60000 --virtual-time-budget=5000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/PIDS_SWM_AA00J_26Mars26.html\")",
+      "Bash(python3 -c \"import PIL\")",
+      "Bash(convert shot_long.png -crop 1400x2000+0+58000 crop_bottom.png)",
+      "Bash(rm -f /home/philippe/shot_long.png)",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --window-size=1400,1000 --virtual-time-budget=3000 --dump-dom \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/PIDS_SWM_AA00J_26Mars26.html\")",
+      "Bash(cp PIDS_SWM_AA00J_26Mars26.html height_check.html)",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --virtual-time-budget=3000 --dump-dom \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/height_check.html\")",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --screenshot=shot_bottom_area.png --window-size=1641,3000 --virtual-time-budget=3000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/height_check.html\")",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --screenshot=shot_scrolled.png --window-size=1641,1200 --virtual-time-budget=5000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/height_check2.html\")",
+      "Bash(chromium --headless --disable-gpu --no-sandbox --screenshot=shot_full3.png --window-size=1641,153200 --virtual-time-budget=8000 \"file:///home/philippe/Electronics/Gael_World/Gael_cleaner/height_check.html\")",
+      "Bash(convert -limit width 200MP -limit height 200MP -limit area 2GB shot_full3.png -crop 1641x2500+0+150700 crop_bottom2.png)",
+      "Bash(MAGICK_HEIGHT_LIMIT=200000 MAGICK_WIDTH_LIMIT=5000 MAGICK_AREA_LIMIT=2GB convert /home/philippe/shot_full3.png -crop 1641x2500+0+150700 /home/philippe/crop_bottom2.png)"
+    ],
+    "additionalDirectories": [
+      "/home/philippe"
+    ]
+  }
+}

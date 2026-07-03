@@ -1,6 +1,19 @@
 # CHANGELOG - mhtml-cleaner.py
 ---
 
+## v2.10.0 — 2026-07-03
+
+### New: `--nda` / `--nda-name` options
+Adds a Non-Disclosure Agreement mention to the document footer.
+- `--nda REF` inserts an ownership/confidentiality row into the existing `<footer>` table (or creates one if absent), stating the document is confidential under NDA `REF`
+- `--nda-name NAME` (optional, requires `--nda`) names the authorized supplier the mention applies to
+- The NDA reference and supplier name are highlighted in bold red; the footer's `max-height` cap is lifted inline so the added row isn't clipped, while it stays pinned (`position: fixed`) to the bottom of the viewport; `body` gets extra bottom padding to compensate for the taller footer
+
+## v2.9.1 — 2026-05-03
+
+### Change: `test-html-validator.py` bundled into `mhtml-cleaner.py`
+The HTML validator is now imported directly so `mhtml-cleaner.py` works as a standalone executable (e.g. PyInstaller bundle) without requiring the validator script alongside it.
+
 ## v2.9.0 — 2026-05-03
 
 ### All scripts aligned to v2.9.0

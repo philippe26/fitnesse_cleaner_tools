@@ -3,13 +3,14 @@
 MHTML Cleaner - Converts MHTML files to standalone HTML
 """
 
-__version__ = '2.9.1'
+__version__ = '2.10.0'
 
 import re
 import csv
 import argparse
 import sys
 import quopri
+import html
 from pathlib import Path
 from typing import Tuple
 
@@ -49,7 +50,9 @@ class MHTMLCleaner:
                  include_hovering: bool = False,
                  include_review: bool = False,
                  review_extra_tags: bool = False,
-                 remove_traceability: bool = False):
+                 remove_traceability: bool = False,
+                 nda: str = None,
+                 nda_name: str = None):
         self.input_file = input_file
         self.output_file = output_file
         self.level = level
@@ -62,6 +65,8 @@ class MHTMLCleaner:
         self.include_review = include_review
         self.review_extra_tags = review_extra_tags
         self.remove_traceability = remove_traceability
+        self.nda = nda
+        self.nda_name = nda_name
 
         self.port = self._extract_port()
         self.main_page = self._extract_main_page_name()
@@ -447,6 +452,71 @@ class MHTMLCleaner:
 
         if self.verbose:
             print(f"  🗑️  Sidenav removed")
+
+        return html_content
+
+    def _inject_nda_footer(self, html_content: str) -> str:
+        """Adds an NDA ownership/distribution row to the existing footer table.
+
+        If no <footer> is present in the document, a new one is created
+        just before </body>.
+        """
+        if not self.nda:
+            return html_content
+
+        nda_text  = f'This document and any attachments are confidential and are intended solely for '
+        if self.nda_name:
+            nda_text += f' <b><span class="blue">{html.escape(self.nda_name)}</span></b>'
+        else:
+            nda_text += f' the addressees'
+        nda_text += f' If you receive this document by error, please to notify the sender immediately. '
+        nda_text += f'<br>Any use not in accordance with its purpose, any dissemination or disclosure, either whole or partial, is prohibited unless prior written approval is obtained.  '
+        nda_text += f'<br><span class="red"><b>Confidential and Proprietary Information under Non-Disclosure Agreement {html.escape(self.nda)}</b></span>'
+
+        nda_row = f'\t<tr>\n\t\t<td colspan="4" style="font-size: 14px; text-align: center;">{nda_text}</td>\n\t</tr>\n'
+
+        # Inline style override: the page's stock footer CSS caps it at
+        # max-height:100px, which clips the extra NDA row instead of growing
+        # the box. Keep position:fixed (footer stays pinned to the viewport
+        # bottom) but let its height grow to fit the new row.
+        footer_style = 'max-height: none !important; height: auto !important;'
+
+        footer_match = re.search(r'<footer([^>]*)>(.*?)</footer>', html_content, flags=re.IGNORECASE | re.DOTALL)
+        if footer_match:
+            attrs, inner = footer_match.group(1), footer_match.group(2)
+            if '</tbody>' in inner:
+                new_inner = inner.replace('</tbody>', nda_row + '</tbody>', 1)
+            elif '</table>' in inner:
+                new_inner = inner.replace('</table>', nda_row + '</table>', 1)
+            else:
+                new_inner = inner + nda_row
+
+            style_m = re.search(r'style\s*=\s*"([^"]*)"', attrs, flags=re.IGNORECASE)
+            if style_m:
+                new_attrs = attrs.replace(style_m.group(0), f'style="{style_m.group(1)}; {footer_style}"')
+            else:
+                new_attrs = f' style="{footer_style}"' + attrs
+
+            new_footer_html = f'<footer{new_attrs}>{new_inner}</footer>'
+            html_content = html_content.replace(footer_match.group(0), new_footer_html, 1)
+
+            # The footer stays position:fixed and now needs more vertical
+            # room, so bump the body's bottom padding to avoid the taller
+            # footer overlapping the end of the document.
+            extra_padding_style = '<style>body { padding-bottom: 260px !important; }</style>'
+            if '</head>' in html_content:
+                html_content = html_content.replace('</head>', extra_padding_style + '</head>', 1)
+            else:
+                html_content = extra_padding_style + html_content
+        else:
+            new_footer = f'<footer style="{footer_style}">\n<table>\n<tbody>\n{nda_row}</tbody></table>\n</footer>\n'
+            if '</body>' in html_content:
+                html_content = html_content.replace('</body>', new_footer + '</body>', 1)
+            else:
+                html_content += new_footer
+
+        if self.verbose:
+            print(f"  🔏 NDA footer added: {self.nda}" + (f" ({self.nda_name})" if self.nda_name else ""))
 
         return html_content
 
@@ -1653,6 +1723,7 @@ class MHTMLCleaner:
             html_cleaned = self._transform_traceability_navpills(html_cleaned)
             html_cleaned = self._remove_fitnesse_buttons(html_cleaned)
             html_cleaned = self._remove_sidenav_div(html_cleaned)
+            html_cleaned = self._inject_nda_footer(html_cleaned)
             if self.include_hovering:
                 html_cleaned = self._inject_hovering(html_cleaned)
             if self.include_review:
@@ -1706,8 +1777,15 @@ def main():
                         help='Run HTML validator on output file after cleaning')
     parser.add_argument('--database-file', default=None,
                         help='Export artifact database to a CSV file')
+    parser.add_argument('--nda', default=None,
+                        help='NDA reference to add to the footer (enables NDA mention)')
+    parser.add_argument('--nda-name', default=None,
+                        help='Authorized supplier name to mention alongside --nda')
 
     args = parser.parse_args()
+
+    if args.nda_name and not args.nda:
+        parser.error('--nda-name requires --nda')
 
     if not Path(args.input_file).exists():
         print(f"❌ File not found: {args.input_file}", file=sys.stderr)
@@ -1735,6 +1813,8 @@ def main():
         include_review=args.include_review,
         review_extra_tags=args.review_extra_tags,
         remove_traceability=args.remove_traceability,
+        nda=args.nda,
+        nda_name=args.nda_name,
         database_file=(
             str(Path(args.database_file).with_suffix('.csv'))
             if args.database_file and not args.database_file.endswith('.csv')
