@@ -46,8 +46,12 @@ $WINE_PY -m pip install --quiet --upgrade pyinstaller xlrd xlwt xlutils openpyxl
 # ── 3. Build mhtml-cleaner.exe ────────────────────────────────────────────────
 echo "🔨 Building mhtml-cleaner.exe..."
 cd "$PROJECT_DIR"
+# PyInstaller resolves --add-data source paths relative to --specpath, not the
+# cwd, so pass an absolute (Windows-style, via winepath) path here.
+VALIDATOR_WIN_PATH="$(winepath -w "$PROJECT_DIR/test-html-validator.py")"
 $WINE_PY -m PyInstaller --noconfirm --onefile --console \
     --name mhtml-cleaner \
+    --add-data "${VALIDATOR_WIN_PATH};." \
     --distpath "$PROJECT_DIR/Releases/windows" \
     --workpath "$SCRIPT_DIR/.build/mhtml-cleaner" \
     --specpath "$SCRIPT_DIR/.build" \
